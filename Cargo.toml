@@ -1,0 +1,57 @@
+[package]
+name = "trurl"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://github.com/trurl-labs/trurl"
+description = "Structured architectural decisions that constrain AI code generation"
+
+[[bin]]
+name = "trurl"
+path = "src/main.rs"
+
+[lib]
+name = "trurl"
+path = "src/lib.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+toml  = "1"
+
+# Error handling
+thiserror = "2"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "deny"
+
+# ── Build profiles ─────────────────────────────────────────────────────────────
+
+[profile.dev]
+opt-level = 0
+debug     = true
+
+[profile.test]
+inherits = "dev"
+
+[profile.release]
+strip           = true
+lto             = "fat"
+codegen-units   = 1
+overflow-checks = true
+panic           = "abort"
+
+[profile.bench]
+inherits = "release"
+strip    = false
+debug    = 2
