@@ -468,6 +468,7 @@ pub fn decide(
     choice: &str,
     reason: &str,
     supersedes: Option<&str>,
+    alternatives: &[String],
 ) -> Result<()> {
     let store = open_store(cwd)?;
     let lock = store.lock()?;
@@ -494,7 +495,7 @@ pub fn decide(
             component: component.into(),
             choice: choice.into(),
             reason: reason.into(),
-            alternatives: vec![],
+            alternatives: alternatives.to_vec(),
             created: Utc::now(),
             supersedes: supersedes.unwrap_or_default().into(),
         },
@@ -840,7 +841,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
         add_component(tmp.path(), "auth").unwrap();
-        decide(tmp.path(), "auth", "Use JWT", "Stateless", None).unwrap();
+        decide(tmp.path(), "auth", "Use JWT", "Stateless", None, &[]).unwrap();
 
         remove_decision(tmp.path(), "use-jwt").unwrap();
 
@@ -865,13 +866,14 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
         add_component(tmp.path(), "auth").unwrap();
-        decide(tmp.path(), "auth", "Session cookies", "Simple", None).unwrap();
+        decide(tmp.path(), "auth", "Session cookies", "Simple", None, &[]).unwrap();
         decide(
             tmp.path(),
             "auth",
             "JWT tokens",
             "Stateless",
             Some("session-cookies"),
+            &[],
         )
         .unwrap();
 
@@ -915,7 +917,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
         add_component(tmp.path(), "auth").unwrap();
-        decide(tmp.path(), "auth", "Use JWT", "Stateless", None).unwrap();
+        decide(tmp.path(), "auth", "Use JWT", "Stateless", None, &[]).unwrap();
 
         let err = remove_component(tmp.path(), "auth").unwrap_err();
         match err {
@@ -1025,8 +1027,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
         add_component(tmp.path(), "auth").unwrap();
-        decide(tmp.path(), "auth", "Use JWT", "Stateless", None).unwrap();
-        decide(tmp.path(), "auth", "Use Redis", "Fast sessions", None).unwrap();
+        decide(tmp.path(), "auth", "Use JWT", "Stateless", None, &[]).unwrap();
+        decide(tmp.path(), "auth", "Use Redis", "Fast sessions", None, &[]).unwrap();
 
         rename_component(tmp.path(), "auth", "authentication").unwrap();
 
@@ -1046,7 +1048,7 @@ mod tests {
         init(tmp.path()).unwrap();
         add_component(tmp.path(), "auth").unwrap();
 
-        decide(tmp.path(), "auth", "JWT with DPoP", "Stateless", None).unwrap();
+        decide(tmp.path(), "auth", "JWT with DPoP", "Stateless", None, &[]).unwrap();
 
         let store = Store::discover(tmp.path()).unwrap();
         let dec = store.read_decision("jwt-with-dpop").unwrap();
@@ -1066,6 +1068,7 @@ mod tests {
             "Fail-closed on writes",
             "Never silently succeed with wrong data",
             None,
+            &[],
         )
         .unwrap();
 
@@ -1082,7 +1085,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
 
-        let err = decide(tmp.path(), "ghost", "x", "y", None).unwrap_err();
+        let err = decide(tmp.path(), "ghost", "x", "y", None, &[]).unwrap_err();
         match err {
             Error::Validation(msg) => assert!(msg.contains("ghost")),
             other => panic!("expected Validation, got: {other}"),
@@ -1095,7 +1098,7 @@ mod tests {
         init(tmp.path()).unwrap();
         add_component(tmp.path(), "auth").unwrap();
 
-        let err = decide(tmp.path(), "auth", "x", "y", Some("ghost")).unwrap_err();
+        let err = decide(tmp.path(), "auth", "x", "y", Some("ghost"), &[]).unwrap_err();
         match err {
             Error::Validation(msg) => assert!(msg.contains("ghost")),
             other => panic!("expected Validation, got: {other}"),
@@ -1108,13 +1111,14 @@ mod tests {
         init(tmp.path()).unwrap();
         add_component(tmp.path(), "auth").unwrap();
 
-        decide(tmp.path(), "auth", "Session cookies", "Simple", None).unwrap();
+        decide(tmp.path(), "auth", "Session cookies", "Simple", None, &[]).unwrap();
         decide(
             tmp.path(),
             "auth",
             "JWT tokens",
             "Stateless",
             Some("session-cookies"),
+            &[],
         )
         .unwrap();
 
@@ -1124,13 +1128,48 @@ mod tests {
     }
 
     #[test]
+    fn decide_records_alternatives() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+        add_component(tmp.path(), "auth").unwrap();
+
+        let alts = vec![
+            "Session cookies — rejected: requires server-side state".into(),
+            "Opaque tokens — rejected: introspection overhead".into(),
+        ];
+        decide(
+            tmp.path(),
+            "auth",
+            "JWT with DPoP",
+            "Stateless",
+            None,
+            &alts,
+        )
+        .unwrap();
+
+        let store = Store::discover(tmp.path()).unwrap();
+        let dec = store.read_decision("jwt-with-dpop").unwrap();
+        assert_eq!(dec.decision.alternatives.len(), 2);
+        assert!(dec.decision.alternatives[0].contains("Session cookies"));
+        assert!(dec.decision.alternatives[1].contains("Opaque tokens"));
+    }
+
+    #[test]
     fn decide_deduplicates_filename() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
         add_component(tmp.path(), "auth").unwrap();
 
-        decide(tmp.path(), "auth", "Use Redis", "Fast", None).unwrap();
-        decide(tmp.path(), "auth", "Use Redis", "Also for sessions", None).unwrap();
+        decide(tmp.path(), "auth", "Use Redis", "Fast", None, &[]).unwrap();
+        decide(
+            tmp.path(),
+            "auth",
+            "Use Redis",
+            "Also for sessions",
+            None,
+            &[],
+        )
+        .unwrap();
 
         let store = Store::discover(tmp.path()).unwrap();
         let names = store.list_decisions().unwrap();
@@ -1144,7 +1183,7 @@ mod tests {
         add_component(tmp.path(), "auth").unwrap();
 
         let before = Utc::now();
-        decide(tmp.path(), "auth", "JWT", "Stateless", None).unwrap();
+        decide(tmp.path(), "auth", "JWT", "Stateless", None, &[]).unwrap();
         let after = Utc::now();
 
         let store = Store::discover(tmp.path()).unwrap();
@@ -1230,6 +1269,7 @@ mod tests {
             "Rust single binary",
             "No runtime deps",
             None,
+            &[],
         )
         .unwrap();
         decide(
@@ -1238,9 +1278,10 @@ mod tests {
             "TOML with serde",
             "Git-diffable",
             None,
+            &[],
         )
         .unwrap();
-        decide(tmp.path(), "cli", "clap derive", "Type-safe", None).unwrap();
+        decide(tmp.path(), "cli", "clap derive", "Type-safe", None, &[]).unwrap();
 
         check(tmp.path()).unwrap();
 

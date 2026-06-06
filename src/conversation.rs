@@ -145,8 +145,14 @@ async fn conversation_loop(
         };
 
         // Extract and write decisions from the response
-        for (choice, reason) in extract_decisions(&response) {
-            let stem = record_decision(store, component, &choice, &reason)?;
+        for dec in extract_decisions(&response) {
+            let stem = record_decision(
+                store,
+                component,
+                &dec.choice,
+                &dec.reason,
+                &dec.alternatives,
+            )?;
             session.decisions_recorded.push(stem.clone());
             eprintln!("  ✓ recorded: {stem}");
         }
@@ -268,7 +274,10 @@ fn build_system_prompt(component: &str, state: &store::ProjectState, revisit: bo
         "## Instructions\n\n\
          Ask ONE design question at a time. After the user answers, summarize \
          their decision as a JSON object on its own line:\n\n\
-         {\"choice\": \"concise decision title\", \"reason\": \"the reasoning\"}\n\n\
+         {\"choice\": \"concise decision title\", \"reason\": \"the reasoning\", \
+         \"alternatives\": [\"Option A — rejected: why\"]}\n\n\
+         Include \"alternatives\" only when other options were discussed or \
+         are worth noting. Omit the field when there are none.\n\n\
          Then continue with the next question. Cover key technical choices, \
          patterns, constraints, and integration points. Reference existing \
          decisions and connections for consistency.\n\n\
@@ -281,10 +290,18 @@ fn build_system_prompt(component: &str, state: &store::ProjectState, revisit: bo
 
 // ── Decision extraction ──────────────────────────────────────────────────────
 
+/// A decision parsed from an LLM response line.
+struct ExtractedDecision {
+    choice: String,
+    reason: String,
+    alternatives: Vec<String>,
+}
+
 /// Extract decision JSON objects from an LLM response.
 ///
-/// Looks for lines containing `{"choice": "...", "reason": "..."}`.
-fn extract_decisions(response: &str) -> Vec<(String, String)> {
+/// Looks for lines containing `{"choice": "...", "reason": "..."}` with an
+/// optional `"alternatives"` array.
+fn extract_decisions(response: &str) -> Vec<ExtractedDecision> {
     let mut decisions = Vec::new();
 
     for line in response.lines() {
@@ -298,7 +315,23 @@ fn extract_decisions(response: &str) -> Vec<(String, String)> {
                 json.get("reason").and_then(|v| v.as_str()),
             ) {
                 if !choice.is_empty() && !reason.is_empty() {
-                    decisions.push((choice.to_string(), reason.to_string()));
+                    let alternatives = json
+                        .get("alternatives")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str())
+                                .filter(|s| !s.is_empty())
+                                .map(String::from)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    decisions.push(ExtractedDecision {
+                        choice: choice.to_string(),
+                        reason: reason.to_string(),
+                        alternatives,
+                    });
                 }
             }
         }
@@ -317,7 +350,13 @@ fn is_design_complete(response: &str) -> bool {
 // ── Decision recording ───────────────────────────────────────────────────────
 
 /// Write a single decision to the store, with full validation.
-fn record_decision(store: &Store, component: &str, choice: &str, reason: &str) -> Result<String> {
+fn record_decision(
+    store: &Store,
+    component: &str,
+    choice: &str,
+    reason: &str,
+    alternatives: &[String],
+) -> Result<String> {
     let lock = store.lock()?;
     let mut state = store.load_state()?;
 
@@ -328,7 +367,7 @@ fn record_decision(store: &Store, component: &str, choice: &str, reason: &str) -
             component: component.into(),
             choice: choice.into(),
             reason: reason.into(),
-            alternatives: vec![],
+            alternatives: alternatives.to_vec(),
             created: Utc::now(),
             supersedes: String::new(),
         },
@@ -415,8 +454,22 @@ mod tests {
             Next, let's talk about storage.";
         let decisions = extract_decisions(response);
         assert_eq!(decisions.len(), 1);
-        assert_eq!(decisions[0].0, "Use JWT");
-        assert_eq!(decisions[0].1, "Stateless auth");
+        assert_eq!(decisions[0].choice, "Use JWT");
+        assert_eq!(decisions[0].reason, "Stateless auth");
+        assert!(decisions[0].alternatives.is_empty());
+    }
+
+    #[test]
+    fn extracts_decision_with_alternatives() {
+        let response = "{\"choice\": \"Redis\", \"reason\": \"Persistent and fast\", \
+            \"alternatives\": [\"Memcached — rejected: no persistence\", \
+            \"In-memory — rejected: lost on restart\"]}";
+        let decisions = extract_decisions(response);
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].choice, "Redis");
+        assert_eq!(decisions[0].alternatives.len(), 2);
+        assert!(decisions[0].alternatives[0].contains("Memcached"));
+        assert!(decisions[0].alternatives[1].contains("In-memory"));
     }
 
     #[test]
@@ -511,6 +564,7 @@ mod tests {
         let prompt = build_system_prompt("auth", &state, false);
         assert!(prompt.contains("DESIGN_COMPLETE"));
         assert!(prompt.contains("\"choice\""));
+        assert!(prompt.contains("\"alternatives\""));
     }
 
     #[test]

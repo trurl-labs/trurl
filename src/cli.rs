@@ -79,6 +79,10 @@ pub enum Command {
         /// Decision this supersedes (filename without `.toml`).
         #[arg(long = "supersede")]
         supersedes: Option<String>,
+
+        /// Alternative considered and rejected (repeatable).
+        #[arg(long = "alternative", short = 'a')]
+        alternatives: Vec<String>,
     },
 
     /// Start the MCP server for AI coding agent integration.
@@ -174,7 +178,15 @@ pub fn run(cli: Cli) -> Result<()> {
             choice,
             reason,
             supersedes,
-        } => commands::decide(&cwd, &component, &choice, &reason, supersedes.as_deref()),
+            alternatives,
+        } => commands::decide(
+            &cwd,
+            &component,
+            &choice,
+            &reason,
+            supersedes.as_deref(),
+            &alternatives,
+        ),
         Command::Serve => not_implemented("serve"),
         Command::Map => not_implemented("map"),
         Command::Status => commands::status(&cwd),
