@@ -69,7 +69,7 @@ pub enum Command {
         reason: String,
 
         /// Decision this supersedes (filename without `.toml`).
-        #[arg(long)]
+        #[arg(long = "supersede")]
         supersedes: Option<String>,
     },
 

@@ -108,6 +108,9 @@ Everything in `.trurl/` (except `.state/`) is git-tracked, human-readable, and h
 | `trurl init` | Create `.trurl/` in your repo |
 | `trurl add component <name>` | Add a component |
 | `trurl add connection <from> <to>` | Connect components |
+| `trurl rename component <old> <new>` | Rename a component, updating all references |
+| `trurl remove component <name>` | Remove a component (refuses if decisions reference it) |
+| `trurl remove decision <name>` | Remove a decision |
 | `trurl design <component>` | Socratic design conversation |
 | `trurl decide <component>` | Quick decision recording |
 | `trurl serve` | Start MCP server for coding agents |

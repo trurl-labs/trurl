@@ -12,6 +12,7 @@
 //! | `components/<name>.toml`    | [`ComponentFile`] |
 //! | `decisions/<name>.toml`     | [`DecisionFile`]  |
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 // ── project.toml ─────────────────────────────────────────────────────────────
@@ -84,8 +85,8 @@ pub struct Decision {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alternatives: Vec<String>,
 
-    /// ISO 8601 timestamp of when this decision was recorded.
-    pub created: String,
+    /// When this decision was recorded (UTC, ISO 8601 / RFC 3339).
+    pub created: DateTime<Utc>,
 
     /// Filename (without `.toml`) of the decision this supersedes, or empty.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -113,6 +114,7 @@ pub const STATE_DIR: &str = ".state";
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn project_round_trip() {
@@ -150,7 +152,7 @@ mod tests {
                 choice: "JWT with DPoP binding".into(),
                 reason: "Stateless, no session store needed".into(),
                 alternatives: vec!["Session cookies — rejected: requires server-side state".into()],
-                created: "2025-06-01T10:30:00Z".into(),
+                created: Utc.with_ymd_and_hms(2025, 6, 1, 10, 30, 0).unwrap(),
                 supersedes: String::new(),
             },
         };
@@ -183,7 +185,7 @@ mod tests {
                 choice: "Use Redis".into(),
                 reason: "Fast".into(),
                 alternatives: vec![],
-                created: "2025-06-01T10:30:00Z".into(),
+                created: Utc.with_ymd_and_hms(2025, 6, 1, 10, 30, 0).unwrap(),
                 supersedes: String::new(),
             },
         };
@@ -192,5 +194,71 @@ mod tests {
             !serialized.contains("supersedes"),
             "empty supersedes should be omitted"
         );
+    }
+
+    #[test]
+    fn decision_created_serializes_iso8601_utc() {
+        let file = DecisionFile {
+            decision: Decision {
+                component: "auth".into(),
+                choice: "JWT".into(),
+                reason: "Stateless".into(),
+                alternatives: vec![],
+                created: Utc.with_ymd_and_hms(2025, 6, 1, 10, 30, 0).unwrap(),
+                supersedes: String::new(),
+            },
+        };
+        let serialized = toml::to_string_pretty(&file).expect("serialize");
+        assert!(
+            serialized.contains("2025-06-01T10:30:00Z"),
+            "created must serialize as ISO 8601 with Z suffix, got:\n{serialized}"
+        );
+    }
+
+    #[test]
+    fn decision_deserializes_from_spec_format() {
+        let toml_str = r#"
+[decision]
+component = "auth"
+choice = "JWT with DPoP binding, 15min lease"
+reason = "Stateless, no session store needed. DPoP prevents token theft."
+alternatives = [
+    "Session cookies — rejected: requires server-side state",
+    "Opaque tokens — rejected: requires token introspection endpoint",
+]
+created = "2025-06-01T10:30:00Z"
+"#;
+        let file: DecisionFile = toml::from_str(toml_str).expect("deserialize spec format");
+        assert_eq!(file.decision.component, "auth");
+        assert_eq!(
+            file.decision.created,
+            Utc.with_ymd_and_hms(2025, 6, 1, 10, 30, 0).unwrap()
+        );
+        assert!(file.decision.supersedes.is_empty());
+    }
+
+    #[test]
+    fn decision_rejects_invalid_timestamp() {
+        let toml_str = r#"
+[decision]
+component = "auth"
+choice = "JWT"
+reason = "Stateless"
+created = "not-a-timestamp"
+"#;
+        let result = toml::from_str::<DecisionFile>(toml_str);
+        assert!(result.is_err(), "invalid timestamp must be rejected");
+    }
+
+    #[test]
+    fn decision_rejects_missing_timestamp() {
+        let toml_str = r#"
+[decision]
+component = "auth"
+choice = "JWT"
+reason = "Stateless"
+"#;
+        let result = toml::from_str::<DecisionFile>(toml_str);
+        assert!(result.is_err(), "missing created field must be rejected");
     }
 }
