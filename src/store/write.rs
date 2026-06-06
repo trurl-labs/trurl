@@ -1,8 +1,3 @@
-//! Atomic write operations, batch commit, and crash recovery.
-//!
-//! All mutations flow through `.state/tmp/` then `rename(2)`. Batch writes
-//! stage all temp files first, then rename in sequence.
-
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -17,7 +12,6 @@ use super::{Store, StoreLock};
 // ── PendingWrite ─────────────────────────────────────────────────────────────
 
 /// A file write staged for batch commit.
-///
 /// Created via [`Store::prepare_write`], executed via [`Store::commit_batch`].
 pub struct PendingWrite {
     pub(super) target: PathBuf,
@@ -28,7 +22,6 @@ pub struct PendingWrite {
 
 impl Store {
     /// Write `value` to `target` atomically via `.state/tmp/`.
-    ///
     /// Serializes to TOML, writes to a temp file, validates by deserializing
     /// back from disk, then renames to the final path. Caller **must** hold
     /// a [`StoreLock`].
@@ -86,7 +79,6 @@ impl Store {
     }
 
     /// Serialize a value to TOML and verify the round-trip.
-    ///
     /// Returns a [`PendingWrite`] for use with [`commit_batch`](Self::commit_batch).
     /// The content is deserialized back to `T` at this stage so that type-safe
     /// verification happens while the type is still known; `commit_batch`
@@ -109,12 +101,10 @@ impl Store {
     }
 
     /// Execute a batch of writes and removes as a two-phase commit.
-    ///
     /// Phase 1: write all content to `.state/tmp/`.
     /// Phase 2: verify each temp file (byte-compare; type-safe check was in `prepare_write`).
     /// Phase 3: rename all temp files to final paths (each atomic on POSIX).
     /// Phase 4: remove old files (best-effort — renames already committed).
-    ///
     /// Caller **must** hold a [`StoreLock`].
     pub fn commit_batch(
         &self,
@@ -211,7 +201,6 @@ impl Store {
         Ok(())
     }
 
-    /// Remove a file from the store. Caller **must** hold a [`StoreLock`].
     pub fn remove_file(&self, _lock: &StoreLock, target: &Path) -> Result<()> {
         self.verify_path(target)?;
         Ok(fs::remove_file(target)?)
@@ -219,10 +208,6 @@ impl Store {
 
     // ── Crash recovery ───────────────────────────────────────────────────
 
-    /// Remove stale temp files left by interrupted writes.
-    ///
-    /// Returns the number of files cleaned. Called on startup of any command
-    /// that reads `.trurl/`.
     pub fn clean_stale_tmp(&self) -> Result<usize> {
         let tmp_dir = self.tmp_dir();
         let entries = match fs::read_dir(&tmp_dir) {
@@ -246,7 +231,6 @@ impl Store {
     }
 }
 
-/// Best-effort cleanup of staged temp files on batch failure.
 fn cleanup_tmp_files(staged: &[(PathBuf, PathBuf)]) {
     for (tmp_path, _) in staged {
         let _ = fs::remove_file(tmp_path);

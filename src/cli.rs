@@ -1,13 +1,7 @@
-//! CLI argument parsing and command dispatch.
-//!
-//! All subcommand types are defined here with `clap::derive`. The binary
-//! parses arguments and calls [`run`] to dispatch.
-
 use clap::{Parser, Subcommand};
 
 use crate::{Result, commands};
 
-/// Trurl — structured architectural decisions that constrain AI code generation.
 #[derive(Parser, Debug)]
 #[command(
     name = "trurl",

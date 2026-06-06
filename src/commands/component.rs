@@ -1,5 +1,3 @@
-//! Component operations: add, connect, rename, remove.
-
 use std::path::Path;
 
 use crate::store::schema::{Component, ComponentFile};
@@ -8,7 +6,6 @@ use crate::{Error, Result};
 
 use super::{open_store_mut, validate_mutation};
 
-/// Add a new component to `.trurl/`.
 pub fn add_component(cwd: &Path, name: &str, description: Option<&str>) -> Result<()> {
     if !store::is_valid_kebab_case(name) {
         return Err(Error::InvalidName(name.into()));
@@ -38,7 +35,6 @@ pub fn add_component(cwd: &Path, name: &str, description: Option<&str>) -> Resul
     Ok(())
 }
 
-/// Connect two existing components (directional: from → to).
 pub fn add_connection(cwd: &Path, from: &str, to: &str) -> Result<()> {
     let (store, lock, mut state) = open_store_mut(cwd)?;
 
@@ -80,7 +76,6 @@ pub fn add_connection(cwd: &Path, from: &str, to: &str) -> Result<()> {
     Ok(())
 }
 
-/// Rename a component, updating all references via batch commit.
 pub fn rename_component(cwd: &Path, old: &str, new: &str) -> Result<()> {
     if !store::is_valid_kebab_case(new) {
         return Err(Error::InvalidName(new.into()));
@@ -161,7 +156,6 @@ pub fn rename_component(cwd: &Path, old: &str, new: &str) -> Result<()> {
     Ok(())
 }
 
-/// Remove a component. Refuses if any decisions reference it.
 pub fn remove_component(cwd: &Path, name: &str) -> Result<()> {
     let (store, lock, mut state) = open_store_mut(cwd)?;
 

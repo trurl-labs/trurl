@@ -1,5 +1,3 @@
-//! `trurl map` — start the interactive architecture map.
-
 use std::path::Path;
 
 use crate::Result;

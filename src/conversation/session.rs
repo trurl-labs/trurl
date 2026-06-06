@@ -1,8 +1,3 @@
-//! Session persistence for `--continue` support.
-//!
-//! Sessions are stored as JSON in `.trurl/.state/sessions/<component>.json`.
-//! Writes are atomic (tmp + rename) so a crash never truncates the session.
-
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -13,7 +8,6 @@ use crate::{Error, Result};
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-/// Persisted conversation state for `--continue` support.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Session {
     pub component: String,
@@ -60,8 +54,6 @@ impl Session {
 
 // ── Persistence ──────────────────────────────────────────────────────────────
 
-/// Build the session file path, validating the component name to prevent
-/// path traversal.
 fn session_path(store: &Store, component: &str) -> Result<PathBuf> {
     if component != "project" && !is_valid_kebab_case(component) {
         return Err(Error::InvalidName(component.into()));

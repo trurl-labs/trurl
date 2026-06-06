@@ -1,9 +1,3 @@
-//! WebSocket handler for live map updates.
-//!
-//! Each connected browser receives the full project state on connect
-//! and again whenever `.trurl/` changes on disk.  Changes are debounced
-//! (100 ms) to coalesce rapid file-system events from atomic writes.
-
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,7 +7,6 @@ use tokio::sync::broadcast;
 
 use crate::store::Store;
 
-/// Drive a single WebSocket connection.
 pub(super) async fn handle(
     mut socket: WebSocket,
     store_root: Arc<Path>,
@@ -59,7 +52,6 @@ pub(super) async fn handle(
     }
 }
 
-/// Load `.trurl/` and serialize to a JSON string for the frontend.
 fn state_json(store_root: &Path) -> Option<String> {
     let store = Store::at(store_root.to_path_buf());
     let state = store.load_state().ok()?;

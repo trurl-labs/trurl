@@ -1,9 +1,3 @@
-//! Interactive architecture map — local web server with live updates.
-//!
-//! `start_server` binds to a random port on localhost, serves a single-page
-//! frontend, exposes a REST API for reads and mutations, and pushes state
-//! updates to connected browsers via WebSocket.
-
 pub(super) mod api;
 mod watcher;
 mod ws;
@@ -33,7 +27,6 @@ pub(super) struct AppState {
 // ── State serialization ──────────────────────────────────────────────────
 
 /// Serialize project state to the JSON shape consumed by the map frontend.
-///
 /// Shared between the REST API (`GET /api/state`) and the WebSocket handler
 /// to keep the two surfaces in sync.
 pub(super) fn serialize_state(state: &ProjectState) -> Value {
@@ -79,7 +72,6 @@ pub(super) fn serialize_state(state: &ProjectState) -> Value {
 
 const INDEX_HTML: &str = include_str!("index.html");
 
-/// Start the map server and block until Ctrl-C.
 pub(crate) async fn start_server(store_root: &Path) -> Result<()> {
     let (broadcast_tx, _) = broadcast::channel::<()>(32);
 

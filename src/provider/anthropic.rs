@@ -1,5 +1,3 @@
-//! Anthropic Messages API (`/v1/messages`) provider.
-
 use std::future::Future;
 use std::pin::Pin;
 

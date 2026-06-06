@@ -1,8 +1,3 @@
-//! LLM provider implementations with streaming SSE support.
-//!
-//! [`LlmProvider`] defines the unified provider trait. [`create_provider`]
-//! returns a `Box<dyn LlmProvider>` dispatching to provider-specific backends.
-
 mod anthropic;
 mod openai;
 pub(crate) mod sse;
@@ -51,13 +46,10 @@ pub(super) struct ApiMessage<'a> {
 
 // ── LlmProvider trait ───────────────────────────────────────────────────────
 
-/// Unified provider trait for LLM API streaming.
 pub trait LlmProvider {
     /// Canonical provider name for diagnostics.
     fn provider_name(&self) -> &'static str;
 
-    /// Stream a completion, calling `on_text` for each text chunk.
-    /// Returns the full accumulated response.
     fn stream_completion<'a>(
         &'a self,
         messages: &'a [Message],
@@ -66,7 +58,6 @@ pub trait LlmProvider {
     ) -> Pin<Box<dyn Future<Output = Result<String>> + 'a>>;
 }
 
-/// Create a provider client from resolved configuration.
 pub fn create_provider(config: ProviderConfig) -> Result<Box<dyn LlmProvider>> {
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(30))

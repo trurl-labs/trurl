@@ -1,19 +1,3 @@
-//! API key management and provider configuration.
-//!
-//! Resolves which LLM provider and API key to use from multiple sources:
-//!
-//! 1. **CLI flags** (`--provider`, `--model`) — highest priority
-//! 2. **Environment variables** (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`)
-//! 3. **Config file** (`~/.config/trurl/config.toml`) — SSH-style: 0600 enforced, keys zeroed
-//! 4. **Auto-detect** — if exactly one provider has a key, use it
-//!
-//! # Security
-//!
-//! - API keys are wrapped in [`ApiKey`], zeroed from memory on drop via `zeroize`
-//! - Config file must be owner-readable only (mode 0600 on Unix)
-//! - Keys never appear in `Display`, `Debug`, error messages, or logs — redacted to last 4 chars
-//! - All intermediate key material (env reads, TOML parsing) is zeroed after use
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -24,7 +8,6 @@ use crate::{Error, Result};
 
 // ── Provider ─────────────────────────────────────────────────────────────────
 
-/// Supported LLM providers for `trurl design`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
     Anthropic,
@@ -33,7 +16,6 @@ pub enum Provider {
 }
 
 impl Provider {
-    /// Canonical lowercase name for CLI and config.
     pub fn name(self) -> &'static str {
         match self {
             Self::Anthropic => "anthropic",
@@ -42,7 +24,6 @@ impl Provider {
         }
     }
 
-    /// Environment variable name for this provider's API key.
     pub fn env_var(self) -> &'static str {
         match self {
             Self::Anthropic => "ANTHROPIC_API_KEY",
@@ -51,7 +32,6 @@ impl Provider {
         }
     }
 
-    /// Default model when none is specified.
     fn default_model(self) -> &'static str {
         match self {
             Self::Anthropic => "claude-sonnet-4-20250514",
@@ -61,7 +41,6 @@ impl Provider {
     }
 }
 
-/// All known providers, in preference order for display.
 const ALL_PROVIDERS: [Provider; 3] = [Provider::Anthropic, Provider::OpenAi, Provider::OpenRouter];
 
 fn parse_provider(name: &str) -> Result<Provider> {
@@ -78,7 +57,6 @@ fn parse_provider(name: &str) -> Result<Provider> {
 // ── ApiKey ────────────────────────────────────────────────────────────────────
 
 /// An API key that is zeroed from memory on drop.
-///
 /// `Display` and `Debug` show only a redacted form (last 4 chars).
 /// Use [`expose`](ApiKey::expose) to access the raw value — only for
 /// HTTP Authorization headers.
@@ -88,7 +66,6 @@ pub struct ApiKey {
 }
 
 impl ApiKey {
-    /// Wrap a raw key string.
     pub fn new(key: String) -> Self {
         Self { inner: key }
     }
@@ -99,7 +76,6 @@ impl ApiKey {
     }
 
     /// Redacted form for diagnostics: `"…abcd"` (last 4 chars).
-    ///
     /// Uses character boundaries (not byte offsets) so multi-byte
     /// suffixes never cause a panic.
     pub fn redacted(&self) -> String {
@@ -124,7 +100,6 @@ impl std::fmt::Display for ApiKey {
 
 // ── ProviderConfig ───────────────────────────────────────────────────────────
 
-/// Fully resolved provider + key + model, ready for API calls.
 #[derive(Debug)]
 pub struct ProviderConfig {
     pub provider: Provider,
@@ -135,9 +110,7 @@ pub struct ProviderConfig {
 // ── ConfigFile (on-disk format) ──────────────────────────────────────────────
 
 /// Deserialized `~/.config/trurl/config.toml`.
-///
 /// All fields optional — an empty file is valid.
-///
 /// ```toml
 /// default_provider = "anthropic"
 /// default_model = "claude-sonnet-4-20250514"
@@ -157,7 +130,6 @@ struct ConfigFile {
 }
 
 impl ConfigFile {
-    /// Get the key for a provider, treating empty strings as absent.
     fn key_for(&self, provider: Provider) -> Option<&str> {
         let val = match provider {
             Provider::Anthropic => self.anthropic_api_key.as_deref(),
@@ -171,7 +143,6 @@ impl ConfigFile {
 // ── EnvKeys ──────────────────────────────────────────────────────────────────
 
 /// Snapshot of API key environment variables, zeroed on drop.
-///
 /// Read once at resolution time to decouple I/O from logic (testability).
 #[derive(Zeroize, ZeroizeOnDrop)]
 struct EnvKeys {
@@ -181,7 +152,6 @@ struct EnvKeys {
 }
 
 impl EnvKeys {
-    /// Read all API key env vars. Empty values treated as absent.
     fn from_env() -> Self {
         let read = |var: &str| std::env::var(var).ok().filter(|s| !s.is_empty());
         Self {
@@ -202,9 +172,6 @@ impl EnvKeys {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
-/// Resolve provider configuration from CLI flags, env vars, and config file.
-///
-/// See [module docs](self) for priority order.
 pub fn resolve_provider(
     provider_flag: Option<&str>,
     model_flag: Option<&str>,
@@ -214,16 +181,12 @@ pub fn resolve_provider(
     resolve_from_sources(provider_flag, model_flag, &config, &env_keys)
 }
 
-/// Path to the config file (`~/.config/trurl/config.toml` or platform equivalent).
-///
-/// Returns `None` if the platform config directory cannot be determined.
 pub fn config_file_path() -> Option<PathBuf> {
     config_base_dir().map(|d| d.join("trurl").join("config.toml"))
 }
 
 // ── Resolution logic (pure, testable) ────────────────────────────────────────
 
-/// Core resolution separated from I/O.
 fn resolve_from_sources(
     provider_flag: Option<&str>,
     model_flag: Option<&str>,
@@ -245,7 +208,6 @@ fn resolve_from_sources(
     })
 }
 
-/// Determine which provider to use.
 fn resolve_provider_choice(
     flag: Option<&str>,
     config: &Option<ConfigFile>,
@@ -267,7 +229,6 @@ fn resolve_provider_choice(
     auto_detect_provider(config, env_keys)
 }
 
-/// Find the provider when only one API key is present.
 fn auto_detect_provider(config: &Option<ConfigFile>, env_keys: &EnvKeys) -> Result<Provider> {
     let has_key = |p: Provider| -> bool {
         env_keys.get(p).is_some() || config.as_ref().and_then(|c| c.key_for(p)).is_some()
@@ -300,7 +261,6 @@ fn auto_detect_provider(config: &Option<ConfigFile>, env_keys: &EnvKeys) -> Resu
     }
 }
 
-/// Resolve the API key for a specific provider (env var > config file).
 fn resolve_key(
     provider: Provider,
     env_keys: &EnvKeys,
@@ -330,7 +290,6 @@ fn resolve_key(
 // ── Config file loading ──────────────────────────────────────────────────────
 
 /// Load and parse the config file. Returns `None` if the file doesn't exist.
-///
 /// Enforces 0600 permissions on Unix. Zeros the raw TOML content after parsing.
 fn load_config_file() -> Result<Option<ConfigFile>> {
     let path = match config_file_path() {
@@ -377,7 +336,6 @@ fn config_base_dir() -> Option<PathBuf> {
 }
 
 /// Verify config file has mode 0600 (owner read/write only).
-///
 /// Refuses group- or world-readable files to prevent key leakage via
 /// shared accounts, accidental commits, or misconfigured mounts.
 #[cfg(unix)]

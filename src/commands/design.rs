@@ -1,5 +1,3 @@
-//! `trurl design` — Socratic design conversation orchestration.
-
 use std::path::Path;
 
 use crate::store::{self};
@@ -7,8 +5,6 @@ use crate::{Error, Result};
 
 use super::discover_store;
 
-/// Start a Socratic design conversation for a component.
-///
 /// Validates the component exists before resolving provider configuration
 /// so that a missing component never surfaces as a confusing API key error.
 pub fn design(

@@ -1,5 +1,3 @@
-//! System prompt construction for design conversations.
-
 use crate::store;
 
 /// Build the system prompt from component context, existing decisions, and mode.

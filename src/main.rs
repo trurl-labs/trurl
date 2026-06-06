@@ -1,7 +1,4 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
-//! Trurl binary entry point.
-//!
-//! All logic lives in [`trurl::cli`] — this file is intentionally thin.
 
 use clap::Parser;
 

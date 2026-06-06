@@ -1,9 +1,3 @@
-//! `.trurl/` store — the persistence layer for Trurl's decision data.
-//!
-//! [`Store`] is the handle to a `.trurl/` directory. Read methods are
-//! lock-free (writes use atomic renames). Write methods require a
-//! [`StoreLock`] passed as a proof parameter.
-
 pub mod schema;
 
 mod state;
@@ -28,16 +22,13 @@ pub use schema::{
 };
 pub use state::{ProjectState, is_valid_kebab_case};
 
-/// Advisory lock timeout (seconds).
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Polling interval while waiting for the lock.
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 // ── Store ────────────────────────────────────────────────────────────────────
 
 /// Handle to a `.trurl/` directory.
-///
 /// Read methods work without locking. Write methods require a [`StoreLock`]
 /// passed as a proof parameter.
 #[derive(Debug)]
@@ -46,7 +37,6 @@ pub struct Store {
 }
 
 impl Store {
-    /// Walk up from `start` to find the nearest `.trurl/` directory.
     pub fn discover(start: &Path) -> Result<Self> {
         let mut current = start.canonicalize()?;
         loop {
@@ -60,9 +50,6 @@ impl Store {
         }
     }
 
-    /// Create a `Store` at the given `.trurl/` path without checking existence.
-    ///
-    /// Used by `init` before the directory is created.
     pub fn at(root: PathBuf) -> Self {
         Self { root }
     }
@@ -104,7 +91,6 @@ impl Store {
     // ── Path safety ─────────────────────────────────────────────────────
 
     /// Verify that `path` is inside the store root directory.
-    ///
     /// Defense-in-depth: all store paths are derived from `self.root`, so
     /// this check should never fire in correct code. It guards against
     /// programming errors that would write or delete files outside `.trurl/`.
@@ -122,7 +108,6 @@ impl Store {
     // ── Locking ──────────────────────────────────────────────────────────
 
     /// Acquire an exclusive advisory lock on `.trurl/`.
-    ///
     /// Times out after 5 seconds. The lock is released when the returned
     /// [`StoreLock`] is dropped.
     pub fn lock(&self) -> Result<StoreLock> {
@@ -181,7 +166,6 @@ impl Store {
         self.read_toml(&self.root.join("project.toml"))
     }
 
-    /// Read a component by name. Returns a clear error if it doesn't exist.
     #[allow(dead_code)]
     pub fn read_component(&self, name: &str) -> Result<ComponentFile> {
         let path = self.component_path(name);
@@ -194,7 +178,6 @@ impl Store {
         }
     }
 
-    /// Read a decision by name. Returns a clear error if it doesn't exist.
     #[allow(dead_code)]
     pub fn read_decision(&self, name: &str) -> Result<DecisionFile> {
         let path = self.decision_path(name);
@@ -215,7 +198,6 @@ impl Store {
         state::list_toml_stems(&self.decisions_dir())
     }
 
-    /// Load the complete project state into memory.
     pub fn load_state(&self) -> Result<ProjectState> {
         let project = self.read_project()?;
 
@@ -240,7 +222,6 @@ impl Store {
 
     // ── Version check ────────────────────────────────────────────────────
 
-    /// Verify the store's format version is compatible with this CLI.
     pub fn check_version(&self) -> Result<()> {
         let project = self.read_project()?;
         let stored = &project.trurl_version;
@@ -262,9 +243,6 @@ impl Store {
 
 // ── StoreLock ────────────────────────────────────────────────────────────────
 
-/// RAII exclusive lock on `.trurl/`.
-///
-/// Acquired via [`Store::lock`], released when dropped.
 #[derive(Debug)]
 pub struct StoreLock {
     _file: File,
@@ -293,7 +271,6 @@ pub(crate) mod testing {
     };
     use chrono::{TimeZone, Utc};
 
-    /// Create a minimal valid `.trurl/` directory and return a `Store` over it.
     pub fn setup_store(dir: &Path) -> Store {
         let root = dir.join(STORE_DIR);
         fs::create_dir_all(root.join(COMPONENTS_DIR)).unwrap();

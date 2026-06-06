@@ -1,8 +1,3 @@
-//! Command handlers for the Trurl CLI.
-//!
-//! Each submodule corresponds to a logical group of CLI subcommands.
-//! Shared helpers (store discovery, validation, slugification) live here.
-
 mod component;
 mod decision;
 mod design;
@@ -26,7 +21,6 @@ use crate::{Error, Result};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Discover and prepare a store: version check and crash recovery.
 pub(crate) fn discover_store(cwd: &Path) -> Result<Store> {
     let store = Store::discover(cwd)?;
     store.check_version()?;
@@ -37,7 +31,6 @@ pub(crate) fn discover_store(cwd: &Path) -> Result<Store> {
     Ok(store)
 }
 
-/// Warn on integrity issues without failing.
 pub(crate) fn warn_on_issues(state: &ProjectState) {
     let issues = state.validate();
     if !issues.is_empty() {
@@ -48,7 +41,6 @@ pub(crate) fn warn_on_issues(state: &ProjectState) {
     }
 }
 
-/// Open an existing store for **read-only** access.
 pub(crate) fn open_store(cwd: &Path) -> Result<(Store, ProjectState)> {
     let store = discover_store(cwd)?;
     let state = store.load_state()?;
@@ -56,7 +48,6 @@ pub(crate) fn open_store(cwd: &Path) -> Result<(Store, ProjectState)> {
     Ok((store, state))
 }
 
-/// Open an existing store for **mutation**.
 pub(crate) fn open_store_mut(cwd: &Path) -> Result<(Store, store::StoreLock, ProjectState)> {
     let store = discover_store(cwd)?;
     let lock = store.lock()?;
@@ -65,7 +56,6 @@ pub(crate) fn open_store_mut(cwd: &Path) -> Result<(Store, store::StoreLock, Pro
     Ok((store, lock, state))
 }
 
-/// Validate that a mutated project state is internally consistent.
 pub(crate) fn validate_mutation(state: &ProjectState) -> Result<()> {
     let issues = state.validate();
     if issues.is_empty() {
@@ -78,10 +68,8 @@ pub(crate) fn validate_mutation(state: &ProjectState) -> Result<()> {
     }
 }
 
-/// Maximum slug length.
 const MAX_SLUG_LEN: usize = 60;
 
-/// Convert a free-form choice string into a kebab-case filename stem.
 pub(crate) fn slugify(input: &str) -> String {
     let mut slug = String::with_capacity(input.len());
     let mut prev_hyphen = true;
@@ -117,10 +105,8 @@ pub(crate) fn slugify(input: &str) -> String {
     slug
 }
 
-/// Upper bound for deduplication suffixes (`-2`, `-3`, …).
 const MAX_DEDUP_SUFFIX: u32 = 10_000;
 
-/// Find a unique decision filename stem, appending `-2`, `-3`, … on collision.
 pub(crate) fn unique_decision_stem(
     decisions: &std::collections::BTreeMap<String, DecisionFile>,
     base: &str,

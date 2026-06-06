@@ -1,10 +1,3 @@
-//! MCP tool definitions, JSON Schema for inputs, and dispatch.
-//!
-//! Three tools exposed to coding agents:
-//! - `get_context`     — tailored spec for a component
-//! - `check_pattern`   — is this pattern covered by existing decisions?
-//! - `get_architecture` — full system overview
-
 use serde_json::Value;
 
 use crate::store::Store;
@@ -13,7 +6,6 @@ use super::context;
 
 // ── Tool metadata ─────────────────────────────────────────────────────────
 
-/// Return the `tools/list` response payload.
 pub(crate) fn tool_list() -> Value {
     serde_json::json!({
         "tools": [
@@ -123,7 +115,6 @@ fn dispatch_get_architecture(state: &ProjectState) -> Value {
 
 // ── MCP result envelopes ─────────────────────────────────────────────────
 
-/// Wrap a payload as a successful tool-call result.
 fn tool_result(payload: &Value) -> Value {
     let text = serde_json::to_string_pretty(payload).unwrap_or_else(|_| payload.to_string());
     serde_json::json!({
@@ -131,7 +122,6 @@ fn tool_result(payload: &Value) -> Value {
     })
 }
 
-/// Wrap an error message as a failed tool-call result.
 fn tool_error(message: &str) -> Value {
     serde_json::json!({
         "content": [{ "type": "text", "text": message }],

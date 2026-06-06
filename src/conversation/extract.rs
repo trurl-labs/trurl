@@ -1,5 +1,3 @@
-//! Decision extraction from LLM responses and recording to the store.
-
 use chrono::Utc;
 use serde_json::Value;
 
@@ -10,7 +8,6 @@ use crate::store::{self, Store};
 
 // ── Extraction ──────────────────────────────────────────────────────────────
 
-/// A decision parsed from an LLM response line.
 pub(crate) struct ExtractedDecision {
     pub choice: String,
     pub reason: String,
@@ -18,10 +15,6 @@ pub(crate) struct ExtractedDecision {
     pub supersedes: Option<String>,
 }
 
-/// Extract decision JSON objects from an LLM response.
-///
-/// Looks for lines containing `{"choice": "...", "reason": "..."}` with
-/// optional `"alternatives"` array and `"supersedes"` string (revisit mode).
 pub(crate) fn extract_decisions(response: &str) -> Vec<ExtractedDecision> {
     let mut decisions = Vec::new();
 
@@ -68,7 +61,6 @@ pub(crate) fn extract_decisions(response: &str) -> Vec<ExtractedDecision> {
     decisions
 }
 
-/// Check if the response signals design completion.
 pub(crate) fn is_design_complete(response: &str) -> bool {
     response
         .lines()
@@ -78,14 +70,11 @@ pub(crate) fn is_design_complete(response: &str) -> bool {
 // ── Recording ───────────────────────────────────────────────────────────────
 
 /// Write a single decision to the store, with full validation.
-///
 /// Acquires the store lock **before** deriving the filename stem and
 /// validating, closing the TOCTOU window between validation and write.
-///
 /// Uses the caller's cached [`ProjectState`] — no re-load from disk.
 /// On success, `state` is updated in-place so subsequent calls see
 /// the new decision. On failure, `state` is rolled back.
-///
 /// If `supersedes` names a decision that doesn't exist (LLM hallucination),
 /// it is dropped with a warning rather than failing the entire write —
 /// the choice and reason are still valuable.

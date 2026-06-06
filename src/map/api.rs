@@ -1,8 +1,3 @@
-//! REST API handlers for the map server.
-//!
-//! All write operations follow the same pattern as CLI commands:
-//! lock → load → mutate in memory → validate → write atomically → release.
-
 use std::sync::Arc;
 
 use axum::Json;

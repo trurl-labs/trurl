@@ -1,5 +1,3 @@
-//! Decision operations: quick-record and remove.
-
 use std::path::Path;
 
 use chrono::Utc;
@@ -10,7 +8,6 @@ use crate::{Error, Result};
 
 use super::{open_store_mut, slugify, unique_decision_stem, validate_mutation};
 
-/// Record a quick decision without the full Socratic flow.
 pub fn decide(
     cwd: &Path,
     component: &str,
@@ -60,7 +57,6 @@ pub fn decide(
     Ok(())
 }
 
-/// Remove a decision. Warns if other decisions supersede it (broken chain).
 pub fn remove_decision(cwd: &Path, name: &str) -> Result<()> {
     let (store, lock, state) = open_store_mut(cwd)?;
 

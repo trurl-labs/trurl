@@ -1,8 +1,3 @@
-//! Context assembly for MCP tool responses.
-//!
-//! Builds structured, authoritative briefs from `.trurl/` state.
-//! Each public function corresponds to an MCP tool.
-
 use std::collections::BTreeSet;
 
 use serde_json::Value;
@@ -99,7 +94,6 @@ pub(crate) fn get_context(
     }))
 }
 
-/// Project-wide context (no specific component).
 fn project_context(state: &ProjectState, task_description: Option<&str>) -> Value {
     let project_decisions: Vec<(&String, &DecisionFile)> = state
         .decisions
@@ -145,20 +139,15 @@ fn project_context(state: &ProjectState, task_description: Option<&str>) -> Valu
 // ── build_brief ──────────────────────────────────────────────────────────
 
 /// Format the authoritative brief that coding agents consume directly.
-///
 /// Structure follows the spec:
 /// ```text
 /// TASK: <if provided>
-///
 /// RULES:
 /// - <project-wide decisions>
-///
 /// COMPONENT: <name>
 /// - <choice> (<reason>)
-///
 /// RELATED:
 /// - <connected component>: <choice>
-///
 /// WHEN UNCERTAIN:
 /// STOP. …
 /// ```
@@ -218,7 +207,6 @@ fn build_brief(
 // ── check_pattern ────────────────────────────────────────────────────────
 
 /// Check whether a pattern or approach is covered by existing decisions.
-///
 /// Performs case-insensitive keyword overlap between the query and every
 /// decision's choice + reason text.  Results are sorted by relevance
 /// (number of matching keywords).
@@ -281,7 +269,6 @@ pub(crate) fn check_pattern(state: &ProjectState, description: &str) -> Value {
 
 // ── get_architecture ─────────────────────────────────────────────────────
 
-/// Full system overview: components, connections, project-wide decisions.
 pub(crate) fn get_architecture(state: &ProjectState) -> Value {
     let components: Vec<Value> = state
         .components
@@ -342,7 +329,6 @@ fn decision_list(decisions: &[(&String, &DecisionFile)]) -> Vec<Value> {
         .collect()
 }
 
-/// Extract lowercase words (≥ 3 chars) from text, filtering stop words.
 fn extract_words(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_alphanumeric())
         .filter(|w| w.len() >= 3)

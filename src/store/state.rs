@@ -1,5 +1,3 @@
-//! In-memory project state and validation.
-
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fs;
@@ -13,7 +11,6 @@ use super::schema::{ComponentFile, DecisionFile, ProjectFile};
 // ── ProjectState ─────────────────────────────────────────────────────────────
 
 /// Complete in-memory snapshot of `.trurl/`.
-///
 /// Keyed by filename stem (e.g. `"auth"`, `"error-strategy"`).
 pub struct ProjectState {
     pub project: ProjectFile,
@@ -22,8 +19,6 @@ pub struct ProjectState {
 }
 
 impl ProjectState {
-    /// Validate referential integrity and schema constraints.
-    /// Returns a list of issues (empty = clean).
     pub fn validate(&self) -> Vec<String> {
         let mut issues = Vec::new();
 
@@ -100,7 +95,6 @@ impl ProjectState {
 // ── Validation helpers ───────────────────────────────────────────────────────
 
 /// Check whether a name is valid kebab-case.
-///
 /// Rules: non-empty, lowercase ASCII letters + digits + hyphens only,
 /// no leading/trailing/consecutive hyphens.
 pub fn is_valid_kebab_case(name: &str) -> bool {
@@ -113,7 +107,6 @@ pub fn is_valid_kebab_case(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// List `.toml` file stems in a directory (sorted). Returns empty on `NotFound`.
 pub(super) fn list_toml_stems(dir: &Path) -> Result<Vec<String>> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,

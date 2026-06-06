@@ -1,5 +1,3 @@
-//! Shared SSE streaming infrastructure and provider-specific text extractors.
-
 use std::time::Duration;
 
 use serde_json::Value;
@@ -9,7 +7,6 @@ use crate::{Error, Result};
 /// Maximum time to wait for the next chunk before treating the stream as stalled.
 const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Stream SSE events from a response, extracting text with the given function.
 pub(crate) async fn stream_sse(
     mut response: reqwest::Response,
     extract: fn(&str) -> Option<String>,
@@ -56,7 +53,6 @@ pub(crate) async fn stream_sse(
     Ok(full)
 }
 
-/// Extract all complete SSE text chunks from a buffer.
 fn drain_sse_text(buffer: &mut String, extract: fn(&str) -> Option<String>) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut consumed = 0;

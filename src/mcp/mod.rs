@@ -1,11 +1,3 @@
-//! MCP server — JSON-RPC 2.0 over stdio.
-//!
-//! `run_server` reads requests from stdin, dispatches to tool handlers,
-//! and writes responses to stdout.  Each tool call re-reads `.trurl/`
-//! from disk so the state is always current (< 1 ms for typical projects).
-//!
-//! Diagnostic output goes to stderr exclusively.
-
 mod context;
 mod protocol;
 mod tools;
@@ -20,12 +12,10 @@ use crate::store::Store;
 
 use protocol::{INVALID_PARAMS, METHOD_NOT_FOUND, PARSE_ERROR, Request, Response};
 
-/// MCP protocol version implemented by this server.
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
 // ── Public entry point ────────────────────────────────────────────────────
 
-/// Run the MCP server on stdio until EOF or a fatal I/O error.
 pub(crate) fn run_server(store_root: &Path) -> Result<()> {
     let store = Store::at(store_root.to_path_buf());
     let stdin = io::stdin();
@@ -62,7 +52,6 @@ pub(crate) fn run_server(store_root: &Path) -> Result<()> {
 
 // ── Request dispatch ──────────────────────────────────────────────────────
 
-/// Dispatch a single request.  Returns `None` for notifications (no `id`).
 fn handle(store: &Store, request: Request) -> Option<Response> {
     if request.is_notification() {
         return None;

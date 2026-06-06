@@ -1,12 +1,9 @@
-//! Read-only query commands: `status` and `check`.
-
 use std::path::Path;
 
 use crate::{Error, Result};
 
 use super::{discover_store, open_store};
 
-/// Print project summary: component count, decision count, any issues.
 pub fn status(cwd: &Path) -> Result<()> {
     let (_store, state) = open_store(cwd)?;
 
@@ -32,7 +29,6 @@ pub fn status(cwd: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Validate `.trurl/` internal consistency.
 pub fn check(cwd: &Path) -> Result<()> {
     let store = discover_store(cwd)?;
     let state = store.load_state()?;

@@ -1,5 +1,3 @@
-//! Conversational design engine for `trurl design`.
-
 mod extract;
 mod prompt;
 mod session;

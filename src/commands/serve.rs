@@ -1,5 +1,3 @@
-//! `trurl serve` — start the MCP server on stdio.
-
 use std::path::Path;
 
 use crate::Result;

@@ -1,5 +1,3 @@
-//! OpenAI-compatible Chat Completions API provider (also used for OpenRouter).
-
 use std::future::Future;
 use std::pin::Pin;
 

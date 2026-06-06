@@ -1,10 +1,3 @@
-//! File watcher for `.trurl/` live updates.
-//!
-//! Watches the store root recursively so that atomic renames of
-//! `project.toml` (write-to-tmp then rename) are correctly detected on
-//! all platforms.  Events inside `.state/` (lock, sessions, temp files)
-//! are filtered out — only content-bearing changes trigger a broadcast.
-
 use std::path::Path;
 
 use notify::{RecursiveMode, Watcher};
@@ -12,10 +5,6 @@ use tokio::sync::broadcast;
 
 use crate::store::schema::STATE_DIR;
 
-/// Start watching `.trurl/` for content changes.
-///
-/// Returns the watcher handle — dropping it stops watching.
-/// The caller must keep it alive for the server's lifetime.
 pub(super) fn start(
     store_root: &Path,
     tx: broadcast::Sender<()>,
