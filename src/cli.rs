@@ -53,6 +53,14 @@ pub enum Command {
         /// Revisit and potentially revise existing decisions.
         #[arg(long)]
         revisit: bool,
+
+        /// LLM provider: anthropic, openai, openrouter (auto-detected if omitted).
+        #[arg(long, short = 'p')]
+        provider: Option<String>,
+
+        /// Model override (default per provider: claude-sonnet-4, gpt-4o, etc.).
+        #[arg(long, short = 'm')]
+        model: Option<String>,
     },
 
     /// Record a quick decision without the full Socratic flow.
