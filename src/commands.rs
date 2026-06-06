@@ -531,7 +531,8 @@ pub fn design(
     let client = crate::provider::LlmClient::from_config(config)?;
 
     let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
+        .enable_io()
+        .enable_time()
         .build()
         .map_err(|e| Error::Io(std::io::Error::other(e)))?;
 
