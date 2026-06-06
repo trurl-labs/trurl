@@ -104,6 +104,10 @@ pub enum AddCommand {
     Component {
         /// Kebab-case component name (e.g. `auth`, `rate-limiter`).
         name: String,
+
+        /// One-line description of what this component does.
+        #[arg(long, short = 'd')]
+        description: Option<String>,
     },
 
     /// Connect two components (directional: from → to).
@@ -149,7 +153,9 @@ pub fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Init => commands::init(&cwd),
         Command::Add(sub) => match sub {
-            AddCommand::Component { name } => commands::add_component(&cwd, &name),
+            AddCommand::Component { name, description } => {
+                commands::add_component(&cwd, &name, description.as_deref())
+            }
             AddCommand::Connection { from, to } => commands::add_connection(&cwd, &from, &to),
         },
         Command::Rename(sub) => match sub {

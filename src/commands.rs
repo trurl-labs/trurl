@@ -183,7 +183,7 @@ fn append_gitignore(cwd: &Path) -> Result<()> {
 // ── add component ────────────────────────────────────────────────────────────
 
 /// Add a new component to `.trurl/`.
-pub fn add_component(cwd: &Path, name: &str) -> Result<()> {
+pub fn add_component(cwd: &Path, name: &str, description: Option<&str>) -> Result<()> {
     if !store::is_valid_kebab_case(name) {
         return Err(Error::InvalidName(name.into()));
     }
@@ -201,7 +201,7 @@ pub fn add_component(cwd: &Path, name: &str) -> Result<()> {
     let comp = ComponentFile {
         component: Component {
             name: name.into(),
-            description: String::new(),
+            description: description.unwrap_or_default().into(),
             connects_to: vec![],
         },
     };
@@ -720,7 +720,7 @@ mod tests {
     fn add_component_creates_file() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
 
         let path = tmp
             .path()
@@ -739,15 +739,15 @@ mod tests {
         init(tmp.path()).unwrap();
 
         assert!(matches!(
-            add_component(tmp.path(), "NotKebab").unwrap_err(),
+            add_component(tmp.path(), "NotKebab", None).unwrap_err(),
             Error::InvalidName(_)
         ));
         assert!(matches!(
-            add_component(tmp.path(), "").unwrap_err(),
+            add_component(tmp.path(), "", None).unwrap_err(),
             Error::InvalidName(_)
         ));
         assert!(matches!(
-            add_component(tmp.path(), "-leading").unwrap_err(),
+            add_component(tmp.path(), "-leading", None).unwrap_err(),
             Error::InvalidName(_)
         ));
     }
@@ -756,13 +756,43 @@ mod tests {
     fn add_component_rejects_duplicate() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
 
-        let err = add_component(tmp.path(), "auth").unwrap_err();
+        let err = add_component(tmp.path(), "auth", None).unwrap_err();
         match err {
             Error::Validation(msg) => assert!(msg.contains("already exists")),
             other => panic!("expected Validation, got: {other}"),
         }
+    }
+
+    #[test]
+    fn add_component_stores_description() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+        add_component(
+            tmp.path(),
+            "auth",
+            Some("Authentication and token management"),
+        )
+        .unwrap();
+
+        let store = Store::discover(tmp.path()).unwrap();
+        let comp = store.read_component("auth").unwrap();
+        assert_eq!(
+            comp.component.description,
+            "Authentication and token management"
+        );
+    }
+
+    #[test]
+    fn add_component_empty_description_when_omitted() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
+
+        let store = Store::discover(tmp.path()).unwrap();
+        let comp = store.read_component("auth").unwrap();
+        assert!(comp.component.description.is_empty());
     }
 
     // ── add connection ───────────────────────────────────────────────────
@@ -771,8 +801,8 @@ mod tests {
     fn add_connection_links_components() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
-        add_component(tmp.path(), "database").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
+        add_component(tmp.path(), "database", None).unwrap();
         add_connection(tmp.path(), "auth", "database").unwrap();
 
         let store = Store::discover(tmp.path()).unwrap();
@@ -784,7 +814,7 @@ mod tests {
     fn add_connection_rejects_nonexistent_from() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
 
         let err = add_connection(tmp.path(), "ghost", "auth").unwrap_err();
         match err {
@@ -797,7 +827,7 @@ mod tests {
     fn add_connection_rejects_nonexistent_to() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
 
         let err = add_connection(tmp.path(), "auth", "ghost").unwrap_err();
         match err {
@@ -810,7 +840,7 @@ mod tests {
     fn add_connection_rejects_self() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
 
         let err = add_connection(tmp.path(), "auth", "auth").unwrap_err();
         match err {
@@ -823,8 +853,8 @@ mod tests {
     fn add_connection_rejects_duplicate() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
-        add_component(tmp.path(), "database").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
+        add_component(tmp.path(), "database", None).unwrap();
         add_connection(tmp.path(), "auth", "database").unwrap();
 
         let err = add_connection(tmp.path(), "auth", "database").unwrap_err();
@@ -840,7 +870,7 @@ mod tests {
     fn remove_decision_deletes_file() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
         decide(tmp.path(), "auth", "Use JWT", "Stateless", None, &[]).unwrap();
 
         remove_decision(tmp.path(), "use-jwt").unwrap();
@@ -865,7 +895,7 @@ mod tests {
     fn remove_decision_warns_on_broken_supersede_chain() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
         decide(tmp.path(), "auth", "Session cookies", "Simple", None, &[]).unwrap();
         decide(
             tmp.path(),
@@ -892,7 +922,7 @@ mod tests {
     fn remove_component_deletes_file() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
 
         remove_component(tmp.path(), "auth").unwrap();
 
@@ -916,7 +946,7 @@ mod tests {
     fn remove_component_refuses_if_decisions_reference_it() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
         decide(tmp.path(), "auth", "Use JWT", "Stateless", None, &[]).unwrap();
 
         let err = remove_component(tmp.path(), "auth").unwrap_err();
@@ -933,9 +963,9 @@ mod tests {
     fn remove_component_cleans_up_incoming_connections() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
-        add_component(tmp.path(), "database").unwrap();
-        add_component(tmp.path(), "cache").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
+        add_component(tmp.path(), "database", None).unwrap();
+        add_component(tmp.path(), "cache", None).unwrap();
         add_connection(tmp.path(), "auth", "database").unwrap();
         add_connection(tmp.path(), "cache", "database").unwrap();
 
@@ -955,7 +985,7 @@ mod tests {
     fn rename_component_updates_file_and_name() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
 
         rename_component(tmp.path(), "auth", "authentication").unwrap();
 
@@ -981,8 +1011,8 @@ mod tests {
     fn rename_component_rejects_existing_new() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
-        add_component(tmp.path(), "auth2").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
+        add_component(tmp.path(), "auth2", None).unwrap();
 
         let err = rename_component(tmp.path(), "auth", "auth2").unwrap_err();
         match err {
@@ -995,7 +1025,7 @@ mod tests {
     fn rename_component_rejects_invalid_new_name() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
 
         assert!(matches!(
             rename_component(tmp.path(), "auth", "NotKebab").unwrap_err(),
@@ -1007,8 +1037,8 @@ mod tests {
     fn rename_component_updates_connections() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
-        add_component(tmp.path(), "database").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
+        add_component(tmp.path(), "database", None).unwrap();
         add_connection(tmp.path(), "auth", "database").unwrap();
         add_connection(tmp.path(), "database", "auth").unwrap();
 
@@ -1026,7 +1056,7 @@ mod tests {
     fn rename_component_updates_decision_references() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
         decide(tmp.path(), "auth", "Use JWT", "Stateless", None, &[]).unwrap();
         decide(tmp.path(), "auth", "Use Redis", "Fast sessions", None, &[]).unwrap();
 
@@ -1046,7 +1076,7 @@ mod tests {
     fn decide_records_component_decision() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
 
         decide(tmp.path(), "auth", "JWT with DPoP", "Stateless", None, &[]).unwrap();
 
@@ -1096,7 +1126,7 @@ mod tests {
     fn decide_rejects_nonexistent_supersede_target() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
 
         let err = decide(tmp.path(), "auth", "x", "y", Some("ghost"), &[]).unwrap_err();
         match err {
@@ -1109,7 +1139,7 @@ mod tests {
     fn decide_supersedes_existing() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
 
         decide(tmp.path(), "auth", "Session cookies", "Simple", None, &[]).unwrap();
         decide(
@@ -1131,7 +1161,7 @@ mod tests {
     fn decide_records_alternatives() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
 
         let alts = vec![
             "Session cookies — rejected: requires server-side state".into(),
@@ -1158,7 +1188,7 @@ mod tests {
     fn decide_deduplicates_filename() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
 
         decide(tmp.path(), "auth", "Use Redis", "Fast", None, &[]).unwrap();
         decide(
@@ -1180,7 +1210,7 @@ mod tests {
     fn decide_sets_timestamp() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
 
         let before = Utc::now();
         decide(tmp.path(), "auth", "JWT", "Stateless", None, &[]).unwrap();
@@ -1205,8 +1235,8 @@ mod tests {
     fn status_after_adding_components() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
-        add_component(tmp.path(), "database").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
+        add_component(tmp.path(), "database", None).unwrap();
         status(tmp.path()).unwrap();
     }
 
@@ -1216,8 +1246,8 @@ mod tests {
     fn check_passes_on_clean_state() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
-        add_component(tmp.path(), "database").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
+        add_component(tmp.path(), "database", None).unwrap();
         add_connection(tmp.path(), "auth", "database").unwrap();
         check(tmp.path()).unwrap();
     }
@@ -1226,7 +1256,7 @@ mod tests {
     fn check_catches_hand_edited_corruption() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth").unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
 
         let path = tmp
             .path()
@@ -1249,11 +1279,11 @@ mod tests {
         init(tmp.path()).unwrap();
 
         // Bootstrap
-        add_component(tmp.path(), "decision-store").unwrap();
-        add_component(tmp.path(), "cli").unwrap();
-        add_component(tmp.path(), "mcp-server").unwrap();
-        add_component(tmp.path(), "conversation").unwrap();
-        add_component(tmp.path(), "map-server").unwrap();
+        add_component(tmp.path(), "decision-store", None).unwrap();
+        add_component(tmp.path(), "cli", None).unwrap();
+        add_component(tmp.path(), "mcp-server", None).unwrap();
+        add_component(tmp.path(), "conversation", None).unwrap();
+        add_component(tmp.path(), "map-server", None).unwrap();
         add_connection(tmp.path(), "cli", "decision-store").unwrap();
         add_connection(tmp.path(), "cli", "mcp-server").unwrap();
         add_connection(tmp.path(), "cli", "conversation").unwrap();
