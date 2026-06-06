@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::commands;
-use crate::provider::{LlmClient, Message, Role};
+use crate::provider::{LlmProvider, Message, Role};
 use crate::schema::{Decision, DecisionFile, STATE_DIR};
 use crate::store::{self, Store};
 use crate::{Error, Result};
@@ -82,7 +82,7 @@ impl Session {
 /// cleanup on completion. On any error, the session is saved for `--continue`.
 pub async fn run_design(
     store: &Store,
-    client: &LlmClient,
+    client: &dyn LlmProvider,
     component: &str,
     continue_session: bool,
     revisit: bool,
@@ -142,7 +142,7 @@ pub async fn run_design(
 
 async fn conversation_loop(
     store: &Store,
-    client: &LlmClient,
+    client: &dyn LlmProvider,
     component: &str,
     system: &str,
     session: &mut Session,

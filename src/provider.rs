@@ -1,8 +1,9 @@
 //! LLM provider implementations with streaming SSE support.
 //!
-//! [`LlmClient`] dispatches to provider-specific implementations via enum,
-//! avoiding async trait object overhead. All providers stream responses
-//! through a shared SSE parser, calling a text callback for each chunk.
+//! [`LlmProvider`] defines the unified provider trait. [`create_provider`]
+//! returns a `Box<dyn LlmProvider>` dispatching to provider-specific
+//! implementations. All providers stream responses through a shared SSE
+//! parser, calling a text callback for each chunk.
 //!
 //! # Providers
 //!
@@ -10,6 +11,8 @@
 //! - **OpenAI** — Chat Completions API (`/v1/chat/completions`)
 //! - **OpenRouter** — OpenAI-compatible format with different base URL
 
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use reqwest::Client;
@@ -44,64 +47,59 @@ impl Role {
     }
 }
 
-// ── LlmClient ────────────────────────────────────────────────────────────────
+// ── LlmProvider trait ───────────────────────────────────────────────────────
 
-/// LLM provider with streaming completion support.
+/// Unified provider trait for LLM API streaming.
 ///
-/// Uses enum dispatch (closed set of providers) — no vtable, no `Box`,
-/// no async trait object-safety issues.
-pub enum LlmClient {
-    Anthropic(AnthropicClient),
-    OpenAi(OpenAiClient),
-}
-
-impl LlmClient {
-    /// Create a provider client from resolved configuration.
-    ///
-    /// Consumes the [`ProviderConfig`] to take ownership of the API key.
-    pub fn from_config(config: ProviderConfig) -> Result<Self> {
-        let client = Client::builder()
-            .connect_timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|e| Error::ProviderConfig(format!("failed to create HTTP client: {e}")))?;
-
-        Ok(match config.provider {
-            Provider::Anthropic => Self::Anthropic(AnthropicClient {
-                client,
-                key: config.key,
-                model: config.model,
-            }),
-            Provider::OpenAi => Self::OpenAi(OpenAiClient {
-                client,
-                key: config.key,
-                model: config.model,
-                base_url: "https://api.openai.com/v1".into(),
-            }),
-            Provider::OpenRouter => Self::OpenAi(OpenAiClient {
-                client,
-                key: config.key,
-                model: config.model,
-                base_url: "https://openrouter.ai/api/v1".into(),
-            }),
-        })
-    }
+/// Implemented by each provider backend. Callers receive a
+/// `Box<dyn LlmProvider>` from [`create_provider`] and interact
+/// through this interface without knowing the concrete type.
+pub trait LlmProvider {
+    /// Canonical provider name for diagnostics and tests.
+    fn provider_name(&self) -> &'static str;
 
     /// Stream a completion, calling `on_text` for each text chunk.
     ///
     /// Returns the full accumulated response. Each chunk is delivered as
     /// soon as it arrives from the provider — the caller controls display
     /// (e.g. printing to stdout, accumulating in a buffer).
-    pub async fn stream_completion(
-        &self,
-        messages: &[Message],
-        system: &str,
-        on_text: &mut dyn FnMut(&str),
-    ) -> Result<String> {
-        match self {
-            Self::Anthropic(c) => c.stream_completion(messages, system, on_text).await,
-            Self::OpenAi(c) => c.stream_completion(messages, system, on_text).await,
-        }
-    }
+    fn stream_completion<'a>(
+        &'a self,
+        messages: &'a [Message],
+        system: &'a str,
+        on_text: &'a mut dyn FnMut(&str),
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + 'a>>;
+}
+
+/// Create a provider client from resolved configuration.
+///
+/// Consumes the [`ProviderConfig`] to take ownership of the API key.
+/// Returns a trait object — callers are decoupled from concrete providers.
+pub fn create_provider(config: ProviderConfig) -> Result<Box<dyn LlmProvider>> {
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| Error::ProviderConfig(format!("failed to create HTTP client: {e}")))?;
+
+    Ok(match config.provider {
+        Provider::Anthropic => Box::new(AnthropicClient {
+            client,
+            key: config.key,
+            model: config.model,
+        }),
+        Provider::OpenAi => Box::new(OpenAiClient {
+            client,
+            key: config.key,
+            model: config.model,
+            base_url: "https://api.openai.com/v1".into(),
+        }),
+        Provider::OpenRouter => Box::new(OpenAiClient {
+            client,
+            key: config.key,
+            model: config.model,
+            base_url: "https://openrouter.ai/api/v1".into(),
+        }),
+    })
 }
 
 // ── Request types (zero-overhead serialization, no intermediate Value tree) ──
@@ -141,12 +139,27 @@ pub struct AnthropicClient {
     model: String,
 }
 
+impl LlmProvider for AnthropicClient {
+    fn provider_name(&self) -> &'static str {
+        "anthropic"
+    }
+
+    fn stream_completion<'a>(
+        &'a self,
+        messages: &'a [Message],
+        system: &'a str,
+        on_text: &'a mut dyn FnMut(&str),
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + 'a>> {
+        Box::pin(self.do_stream(messages, system, on_text))
+    }
+}
+
 impl AnthropicClient {
     const API_URL: &str = "https://api.anthropic.com/v1/messages";
     const API_VERSION: &str = "2023-06-01";
     const MAX_TOKENS: u32 = 4096;
 
-    async fn stream_completion(
+    async fn do_stream(
         &self,
         messages: &[Message],
         system: &str,
@@ -194,10 +207,29 @@ pub struct OpenAiClient {
     base_url: String,
 }
 
+impl LlmProvider for OpenAiClient {
+    fn provider_name(&self) -> &'static str {
+        if self.base_url.contains("openrouter") {
+            "openai-compatible/openrouter"
+        } else {
+            "openai"
+        }
+    }
+
+    fn stream_completion<'a>(
+        &'a self,
+        messages: &'a [Message],
+        system: &'a str,
+        on_text: &'a mut dyn FnMut(&str),
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + 'a>> {
+        Box::pin(self.do_stream(messages, system, on_text))
+    }
+}
+
 impl OpenAiClient {
     const MAX_TOKENS: u32 = 4096;
 
-    async fn stream_completion(
+    async fn do_stream(
         &self,
         messages: &[Message],
         system: &str,
@@ -586,36 +618,36 @@ mod tests {
     // ── Client construction ─────────────────────────────────────────────
 
     #[test]
-    fn from_config_anthropic() {
+    fn create_provider_anthropic() {
         let config = ProviderConfig {
             provider: Provider::Anthropic,
             key: ApiKey::new("sk-test".into()),
             model: "claude-sonnet-4-20250514".into(),
         };
-        let client = LlmClient::from_config(config).unwrap();
-        assert!(matches!(client, LlmClient::Anthropic(_)));
+        let client = create_provider(config).unwrap();
+        assert_eq!(client.provider_name(), "anthropic");
     }
 
     #[test]
-    fn from_config_openai() {
+    fn create_provider_openai() {
         let config = ProviderConfig {
             provider: Provider::OpenAi,
             key: ApiKey::new("sk-test".into()),
             model: "gpt-4o".into(),
         };
-        let client = LlmClient::from_config(config).unwrap();
-        assert!(matches!(client, LlmClient::OpenAi(_)));
+        let client = create_provider(config).unwrap();
+        assert_eq!(client.provider_name(), "openai");
     }
 
     #[test]
-    fn from_config_openrouter_uses_openai_client() {
+    fn create_provider_openrouter_uses_openai_compatible() {
         let config = ProviderConfig {
             provider: Provider::OpenRouter,
             key: ApiKey::new("sk-test".into()),
             model: "anthropic/claude-sonnet-4-20250514".into(),
         };
-        let client = LlmClient::from_config(config).unwrap();
-        assert!(matches!(client, LlmClient::OpenAi(_)));
+        let client = create_provider(config).unwrap();
+        assert!(client.provider_name().starts_with("openai-compatible"));
     }
 
     #[test]

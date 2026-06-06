@@ -270,9 +270,11 @@ impl Store {
 
     /// Write `value` to `target` atomically via `.state/tmp/`.
     ///
-    /// Serializes to TOML, writes to a temp file, validates by re-reading,
-    /// then renames to the final path. Caller **must** hold a [`StoreLock`].
-    pub fn write_atomic<T: Serialize>(
+    /// Serializes to TOML, writes to a temp file, validates by deserializing
+    /// back from disk, then renames to the final path. The deserialize-back
+    /// step catches partial writes, bitflips, and serialization round-trip
+    /// issues. Caller **must** hold a [`StoreLock`].
+    pub fn write_atomic<T: Serialize + DeserializeOwned>(
         &self,
         _lock: &StoreLock,
         target: &Path,
@@ -293,8 +295,8 @@ impl Store {
             return Err(Error::Io(e));
         }
 
-        // Verify write integrity — byte-compare catches bitflips and
-        // partial writes without the cost of a full deserialize cycle.
+        // Validate written file by deserializing back — catches partial
+        // writes, encoding corruption, and serialization round-trip issues.
         let readback = match fs::read_to_string(&tmp_path) {
             Ok(s) => s,
             Err(e) => {
@@ -302,11 +304,11 @@ impl Store {
                 return Err(Error::Io(e));
             }
         };
-        if readback != content {
+        if let Err(e) = toml::from_str::<T>(&readback) {
             let _ = fs::remove_file(&tmp_path);
-            return Err(Error::Validation(
-                "write verification failed: content mismatch after write".into(),
-            ));
+            return Err(Error::Validation(format!(
+                "write verification failed: written file does not deserialize: {e}"
+            )));
         }
 
         // Ensure parent directory exists
@@ -325,13 +327,24 @@ impl Store {
 
     // ── Batch writing (multi-file transactions) ──────────────────────────
 
-    /// Serialize a value to TOML without touching disk.
+    /// Serialize a value to TOML and verify the round-trip.
     ///
     /// Returns a [`PendingWrite`] for use with [`commit_batch`](Self::commit_batch).
-    pub fn prepare_write<T: Serialize>(&self, target: &Path, value: &T) -> Result<PendingWrite> {
+    /// The content is deserialized back to `T` at this stage so that type-safe
+    /// verification happens while the type is still known; `commit_batch`
+    /// then verifies filesystem-level integrity via byte-compare.
+    pub fn prepare_write<T: Serialize + DeserializeOwned>(
+        &self,
+        target: &Path,
+        value: &T,
+    ) -> Result<PendingWrite> {
+        let content = toml::to_string_pretty(value)?;
+        toml::from_str::<T>(&content).map_err(|e| {
+            Error::Validation(format!("serialization round-trip verification failed: {e}"))
+        })?;
         Ok(PendingWrite {
             target: target.to_path_buf(),
-            content: toml::to_string_pretty(value)?,
+            content,
         })
     }
 
@@ -381,7 +394,9 @@ impl Store {
             staged.push((tmp_path, write.target.clone()));
         }
 
-        // Phase 2: Verify write integrity (byte-compare against serialized content)
+        // Phase 2: Verify write integrity — type-safe deserialization already
+        // happened in prepare_write; this byte-compare catches filesystem-level
+        // corruption (partial writes, bitflips) on the validated content.
         for (i, (tmp_path, _)) in staged.iter().enumerate() {
             let readback = match fs::read_to_string(tmp_path) {
                 Ok(s) => s,

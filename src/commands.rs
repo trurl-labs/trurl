@@ -532,6 +532,8 @@ pub fn decide(
 
 /// Start a Socratic design conversation for a component.
 ///
+/// Validates the component exists before resolving provider configuration
+/// so that a missing component never surfaces as a confusing API key error.
 /// Creates a single-threaded async runtime for the LLM streaming conversation.
 /// All other store operations remain synchronous.
 pub fn design(
@@ -549,9 +551,20 @@ pub fn design(
 
     let store = discover_store(cwd)?;
 
+    // Fail fast: verify component exists before provider/API key resolution.
+    if component != "project" {
+        let names = store.list_components()?;
+        if !names.iter().any(|n| n == component) {
+            return Err(Error::Validation(format!(
+                "component `{component}` does not exist"
+            )));
+        }
+    }
+
     let config = crate::config::resolve_provider(provider_flag, model_flag)?;
-    eprintln!("Using {} ({})", config.provider.name(), config.model);
-    let client = crate::provider::LlmClient::from_config(config)?;
+    let model = config.model.clone();
+    let client = crate::provider::create_provider(config)?;
+    eprintln!("Using {} ({})", client.provider_name(), model);
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -561,7 +574,7 @@ pub fn design(
 
     rt.block_on(crate::conversation::run_design(
         &store,
-        &client,
+        &*client,
         component,
         continue_session,
         revisit,
@@ -1295,6 +1308,23 @@ mod tests {
         // Empty name
         let err = design(tmp.path(), "", false, false, None, None).unwrap_err();
         assert!(matches!(err, Error::InvalidName(_)));
+    }
+
+    #[test]
+    fn design_rejects_nonexistent_component_before_provider() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+
+        // No API keys configured — but the error should be about the
+        // missing component, not about missing API keys.
+        let err = design(tmp.path(), "ghost", false, false, None, None).unwrap_err();
+        match err {
+            Error::Validation(msg) => assert!(
+                msg.contains("ghost") && msg.contains("does not exist"),
+                "expected missing-component error, got: {msg}"
+            ),
+            other => panic!("expected Validation, got: {other}"),
+        }
     }
 
     // ── status ───────────────────────────────────────────────────────────
