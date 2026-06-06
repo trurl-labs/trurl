@@ -1,0 +1,3 @@
+[component]
+name = "decision-store"
+description = "TOML-based file store in .trurl/ - atomic reads/writes, flock locking, referential integrity validation, crash recovery"
