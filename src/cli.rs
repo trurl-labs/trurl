@@ -193,7 +193,7 @@ pub fn run(cli: Cli) -> Result<()> {
             supersedes.as_deref(),
             &alternatives,
         ),
-        Command::Serve => not_implemented("serve"),
+        Command::Serve => commands::serve(&cwd),
         Command::Map => not_implemented("map"),
         Command::Status => commands::status(&cwd),
         Command::Check => commands::check(&cwd),

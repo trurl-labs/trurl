@@ -8,12 +8,14 @@ mod decision;
 mod design;
 mod init;
 mod query;
+mod serve;
 
 pub use component::{add_component, add_connection, remove_component, rename_component};
 pub use decision::{decide, remove_decision};
 pub use design::design;
 pub use init::init;
 pub use query::{check, status};
+pub use serve::serve;
 
 use std::path::Path;
 
