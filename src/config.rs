@@ -18,7 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::{Error, Result};
 
@@ -82,6 +82,7 @@ fn parse_provider(name: &str) -> Result<Provider> {
 /// `Display` and `Debug` show only a redacted form (last 4 chars).
 /// Use [`expose`](ApiKey::expose) to access the raw value — only for
 /// HTTP Authorization headers.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct ApiKey {
     inner: String,
 }
@@ -98,18 +99,14 @@ impl ApiKey {
     }
 
     /// Redacted form for diagnostics: `"…abcd"` (last 4 chars).
+    ///
+    /// Uses character boundaries (not byte offsets) so multi-byte
+    /// suffixes never cause a panic.
     pub fn redacted(&self) -> String {
-        if self.inner.len() >= 4 {
-            format!("…{}", &self.inner[self.inner.len() - 4..])
-        } else {
-            "…****".into()
+        match self.inner.char_indices().rev().nth(3) {
+            Some((offset, _)) => format!("…{}", &self.inner[offset..]),
+            None => "…****".into(),
         }
-    }
-}
-
-impl Drop for ApiKey {
-    fn drop(&mut self) {
-        self.inner.zeroize();
     }
 }
 
@@ -148,27 +145,15 @@ pub struct ProviderConfig {
 /// openai_api_key = "sk-..."
 /// openrouter_api_key = "sk-or-..."
 /// ```
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Zeroize, ZeroizeOnDrop)]
 struct ConfigFile {
+    #[zeroize(skip)]
     default_provider: Option<String>,
+    #[zeroize(skip)]
     default_model: Option<String>,
     anthropic_api_key: Option<String>,
     openai_api_key: Option<String>,
     openrouter_api_key: Option<String>,
-}
-
-impl Drop for ConfigFile {
-    fn drop(&mut self) {
-        if let Some(ref mut k) = self.anthropic_api_key {
-            k.zeroize();
-        }
-        if let Some(ref mut k) = self.openai_api_key {
-            k.zeroize();
-        }
-        if let Some(ref mut k) = self.openrouter_api_key {
-            k.zeroize();
-        }
-    }
 }
 
 impl ConfigFile {
@@ -188,6 +173,7 @@ impl ConfigFile {
 /// Snapshot of API key environment variables, zeroed on drop.
 ///
 /// Read once at resolution time to decouple I/O from logic (testability).
+#[derive(Zeroize, ZeroizeOnDrop)]
 struct EnvKeys {
     anthropic: Option<String>,
     openai: Option<String>,
@@ -210,20 +196,6 @@ impl EnvKeys {
             Provider::Anthropic => self.anthropic.as_deref(),
             Provider::OpenAi => self.openai.as_deref(),
             Provider::OpenRouter => self.openrouter.as_deref(),
-        }
-    }
-}
-
-impl Drop for EnvKeys {
-    fn drop(&mut self) {
-        if let Some(ref mut k) = self.anthropic {
-            k.zeroize();
-        }
-        if let Some(ref mut k) = self.openai {
-            k.zeroize();
-        }
-        if let Some(ref mut k) = self.openrouter {
-            k.zeroize();
         }
     }
 }
@@ -466,6 +438,22 @@ mod tests {
     fn api_key_expose_returns_full_value() {
         let key = ApiKey::new("sk-ant-full-key".into());
         assert_eq!(key.expose(), "sk-ant-full-key");
+    }
+
+    #[test]
+    fn api_key_redacted_handles_multibyte_utf8() {
+        // A key ending with multi-byte characters must not panic.
+        let key = ApiKey::new("sk-test-café".into());
+        let redacted = key.redacted();
+        assert!(redacted.starts_with('…'));
+        // 'é' is 2 bytes — the old byte-slicing code would panic here.
+        assert!(redacted.ends_with("afé"));
+    }
+
+    #[test]
+    fn api_key_redacted_exact_four_chars() {
+        let key = ApiKey::new("abcd".into());
+        assert_eq!(key.redacted(), "…abcd");
     }
 
     // ── Provider ────────────────────────────────────────────────────────

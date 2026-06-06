@@ -265,7 +265,7 @@ impl Store {
     ///
     /// Serializes to TOML, writes to a temp file, validates by re-reading,
     /// then renames to the final path. Caller **must** hold a [`StoreLock`].
-    pub fn write_atomic<T: Serialize + DeserializeOwned>(
+    pub fn write_atomic<T: Serialize>(
         &self,
         _lock: &StoreLock,
         target: &Path,
@@ -286,7 +286,8 @@ impl Store {
             return Err(Error::Io(e));
         }
 
-        // Validate by re-reading — fail-closed
+        // Verify write integrity — byte-compare catches bitflips and
+        // partial writes without the cost of a full deserialize cycle.
         let readback = match fs::read_to_string(&tmp_path) {
             Ok(s) => s,
             Err(e) => {
@@ -294,9 +295,11 @@ impl Store {
                 return Err(Error::Io(e));
             }
         };
-        if let Err(e) = toml::from_str::<T>(&readback) {
+        if readback != content {
             let _ = fs::remove_file(&tmp_path);
-            return Err(Error::TomlRead(e));
+            return Err(Error::Validation(
+                "write verification failed: content mismatch after write".into(),
+            ));
         }
 
         // Ensure parent directory exists
@@ -371,8 +374,8 @@ impl Store {
             staged.push((tmp_path, write.target.clone()));
         }
 
-        // Phase 2: Validate by re-reading (defense-in-depth against fs corruption)
-        for (tmp_path, _) in &staged {
+        // Phase 2: Verify write integrity (byte-compare against serialized content)
+        for (i, (tmp_path, _)) in staged.iter().enumerate() {
             let readback = match fs::read_to_string(tmp_path) {
                 Ok(s) => s,
                 Err(e) => {
@@ -380,11 +383,11 @@ impl Store {
                     return Err(Error::Io(e));
                 }
             };
-            if let Err(e) = toml::from_str::<toml::Value>(&readback) {
+            if readback != writes[i].content {
                 cleanup_tmp_files(&staged);
-                return Err(Error::Validation(format!(
-                    "batch readback validation failed: {e}"
-                )));
+                return Err(Error::Validation(
+                    "batch write verification failed: content mismatch".into(),
+                ));
             }
         }
 

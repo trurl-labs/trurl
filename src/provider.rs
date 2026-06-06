@@ -13,6 +13,7 @@
 use std::time::Duration;
 
 use reqwest::Client;
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::config::{ApiKey, Provider, ProviderConfig};
@@ -103,6 +104,34 @@ impl LlmClient {
     }
 }
 
+// ── Request types (zero-overhead serialization, no intermediate Value tree) ──
+
+/// A message in an API request body.
+#[derive(Serialize)]
+struct ApiMessage<'a> {
+    role: &'a str,
+    content: &'a str,
+}
+
+/// Anthropic Messages API request body.
+#[derive(Serialize)]
+struct AnthropicRequest<'a> {
+    model: &'a str,
+    max_tokens: u32,
+    system: &'a str,
+    stream: bool,
+    messages: Vec<ApiMessage<'a>>,
+}
+
+/// OpenAI-compatible Chat Completions request body.
+#[derive(Serialize)]
+struct OpenAiRequest<'a> {
+    model: &'a str,
+    max_tokens: u32,
+    stream: bool,
+    messages: Vec<ApiMessage<'a>>,
+}
+
 // ── AnthropicClient ──────────────────────────────────────────────────────────
 
 /// Anthropic Messages API client.
@@ -123,23 +152,21 @@ impl AnthropicClient {
         system: &str,
         on_text: &mut dyn FnMut(&str),
     ) -> Result<String> {
-        let api_messages: Vec<Value> = messages
+        let api_messages: Vec<ApiMessage<'_>> = messages
             .iter()
-            .map(|m| {
-                serde_json::json!({
-                    "role": m.role.as_str(),
-                    "content": &m.content,
-                })
+            .map(|m| ApiMessage {
+                role: m.role.as_str(),
+                content: &m.content,
             })
             .collect();
 
-        let body = serde_json::json!({
-            "model": &self.model,
-            "max_tokens": Self::MAX_TOKENS,
-            "system": system,
-            "stream": true,
-            "messages": api_messages,
-        });
+        let body = AnthropicRequest {
+            model: &self.model,
+            max_tokens: Self::MAX_TOKENS,
+            system,
+            stream: true,
+            messages: api_messages,
+        };
 
         let response = self
             .client
@@ -176,27 +203,27 @@ impl OpenAiClient {
         system: &str,
         on_text: &mut dyn FnMut(&str),
     ) -> Result<String> {
-        let mut api_messages: Vec<Value> = Vec::with_capacity(messages.len() + 1);
+        let mut api_messages: Vec<ApiMessage<'_>> = Vec::with_capacity(messages.len() + 1);
 
         // OpenAI encodes the system prompt as a system-role message
-        api_messages.push(serde_json::json!({
-            "role": "system",
-            "content": system,
-        }));
+        api_messages.push(ApiMessage {
+            role: "system",
+            content: system,
+        });
 
         for m in messages {
-            api_messages.push(serde_json::json!({
-                "role": m.role.as_str(),
-                "content": &m.content,
-            }));
+            api_messages.push(ApiMessage {
+                role: m.role.as_str(),
+                content: &m.content,
+            });
         }
 
-        let body = serde_json::json!({
-            "model": &self.model,
-            "max_tokens": Self::MAX_TOKENS,
-            "stream": true,
-            "messages": api_messages,
-        });
+        let body = OpenAiRequest {
+            model: &self.model,
+            max_tokens: Self::MAX_TOKENS,
+            stream: true,
+            messages: api_messages,
+        };
 
         let url = format!("{}/chat/completions", self.base_url);
 
@@ -259,16 +286,16 @@ async fn stream_sse(
 
 /// Extract all complete SSE text chunks from a buffer.
 ///
-/// Processes lines terminated by `\n`, leaving any trailing incomplete
-/// line in the buffer for the next call. Skips SSE comments (`:` prefix),
-/// empty lines (event delimiters), and `[DONE]` markers.
+/// Scans for lines terminated by `\n`, collecting text from `data:` fields.
+/// Drains consumed bytes in a single operation at the end, leaving any
+/// trailing incomplete line in the buffer for the next call.
 fn drain_sse_text(buffer: &mut String, extract: fn(&str) -> Option<String>) -> Vec<String> {
     let mut chunks = Vec::new();
+    let mut consumed = 0;
 
-    while let Some(pos) = buffer.find('\n') {
-        let raw_line = buffer[..pos].to_string();
-        buffer.drain(..=pos);
-        let line = raw_line.trim();
+    while let Some(pos) = buffer[consumed..].find('\n') {
+        let line = buffer[consumed..consumed + pos].trim();
+        consumed += pos + 1;
 
         // Skip empty lines (SSE event boundary) and comments
         if line.is_empty() || line.starts_with(':') {
@@ -285,6 +312,9 @@ fn drain_sse_text(buffer: &mut String, extract: fn(&str) -> Option<String>) -> V
         }
     }
 
+    if consumed > 0 {
+        buffer.drain(..consumed);
+    }
     chunks
 }
 
