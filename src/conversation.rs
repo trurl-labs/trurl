@@ -152,6 +152,7 @@ async fn conversation_loop(
                 &dec.choice,
                 &dec.reason,
                 &dec.alternatives,
+                dec.supersedes.as_deref(),
             )?;
             session.decisions_recorded.push(stem.clone());
             eprintln!("  ✓ recorded: {stem}");
@@ -266,7 +267,9 @@ fn build_system_prompt(component: &str, state: &store::ProjectState, revisit: bo
             "## Mode: Revisit\n\
              Challenge each existing decision. Ask if the reasoning still holds \
              and if better alternatives exist. For changed decisions, output the \
-             new decision JSON. Skip decisions the user wants to keep.\n\n",
+             new decision JSON with a \"supersedes\" field naming the decision \
+             being replaced (e.g. \"supersedes\": \"auth-token-format\"). \
+             Skip decisions the user wants to keep.\n\n",
         );
     }
 
@@ -295,12 +298,13 @@ struct ExtractedDecision {
     choice: String,
     reason: String,
     alternatives: Vec<String>,
+    supersedes: Option<String>,
 }
 
 /// Extract decision JSON objects from an LLM response.
 ///
-/// Looks for lines containing `{"choice": "...", "reason": "..."}` with an
-/// optional `"alternatives"` array.
+/// Looks for lines containing `{"choice": "...", "reason": "..."}` with
+/// optional `"alternatives"` array and `"supersedes"` string (revisit mode).
 fn extract_decisions(response: &str) -> Vec<ExtractedDecision> {
     let mut decisions = Vec::new();
 
@@ -327,10 +331,17 @@ fn extract_decisions(response: &str) -> Vec<ExtractedDecision> {
                         })
                         .unwrap_or_default();
 
+                    let supersedes = json
+                        .get("supersedes")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(String::from);
+
                     decisions.push(ExtractedDecision {
                         choice: choice.to_string(),
                         reason: reason.to_string(),
                         alternatives,
+                        supersedes,
                     });
                 }
             }
@@ -350,15 +361,30 @@ fn is_design_complete(response: &str) -> bool {
 // ── Decision recording ───────────────────────────────────────────────────────
 
 /// Write a single decision to the store, with full validation.
+///
+/// If `supersedes` names a decision that doesn't exist (LLM hallucination),
+/// it is dropped with a warning rather than failing the entire write —
+/// the choice and reason are still valuable.
 fn record_decision(
     store: &Store,
     component: &str,
     choice: &str,
     reason: &str,
     alternatives: &[String],
+    supersedes: Option<&str>,
 ) -> Result<String> {
     let lock = store.lock()?;
     let mut state = store.load_state()?;
+
+    // Validate supersedes target — warn and drop if the LLM hallucinated
+    let validated_supersedes = match supersedes {
+        Some(target) if state.decisions.contains_key(target) => target,
+        Some(target) => {
+            eprintln!("  ⚠ ignoring supersedes `{target}` — decision not found");
+            ""
+        }
+        None => "",
+    };
 
     let stem = commands::unique_decision_stem(store, &commands::slugify(choice));
 
@@ -369,7 +395,7 @@ fn record_decision(
             reason: reason.into(),
             alternatives: alternatives.to_vec(),
             created: Utc::now(),
-            supersedes: String::new(),
+            supersedes: validated_supersedes.into(),
         },
     };
 
@@ -457,6 +483,7 @@ mod tests {
         assert_eq!(decisions[0].choice, "Use JWT");
         assert_eq!(decisions[0].reason, "Stateless auth");
         assert!(decisions[0].alternatives.is_empty());
+        assert!(decisions[0].supersedes.is_none());
     }
 
     #[test]
@@ -470,6 +497,27 @@ mod tests {
         assert_eq!(decisions[0].alternatives.len(), 2);
         assert!(decisions[0].alternatives[0].contains("Memcached"));
         assert!(decisions[0].alternatives[1].contains("In-memory"));
+        assert!(decisions[0].supersedes.is_none());
+    }
+
+    #[test]
+    fn extracts_decision_with_supersedes() {
+        let response = "{\"choice\": \"Session cookies\", \"reason\": \"Simpler\", \
+            \"supersedes\": \"auth-token-format\"}";
+        let decisions = extract_decisions(response);
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(
+            decisions[0].supersedes.as_deref(),
+            Some("auth-token-format")
+        );
+    }
+
+    #[test]
+    fn extracts_decision_ignores_empty_supersedes() {
+        let response = "{\"choice\": \"X\", \"reason\": \"Y\", \"supersedes\": \"\"}";
+        let decisions = extract_decisions(response);
+        assert_eq!(decisions.len(), 1);
+        assert!(decisions[0].supersedes.is_none());
     }
 
     #[test]
@@ -573,6 +621,7 @@ mod tests {
         let prompt = build_system_prompt("auth", &state, true);
         assert!(prompt.contains("Revisit"));
         assert!(prompt.contains("Challenge"));
+        assert!(prompt.contains("\"supersedes\""));
     }
 
     #[test]
