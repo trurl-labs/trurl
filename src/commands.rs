@@ -7,9 +7,11 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
+use chrono::Utc;
+
 use crate::schema::{
-    COMPONENTS_DIR, Component, ComponentFile, DECISIONS_DIR, FORMAT_VERSION, Project, ProjectFile,
-    STATE_DIR, STORE_DIR,
+    COMPONENTS_DIR, Component, ComponentFile, DECISIONS_DIR, Decision, DecisionFile,
+    FORMAT_VERSION, Project, ProjectFile, STATE_DIR, STORE_DIR,
 };
 use crate::store::{self, Store};
 use crate::{Error, Result};
@@ -25,6 +27,65 @@ fn open_store(cwd: &Path) -> Result<Store> {
         eprintln!("warning: cleaned {stale} stale temp file(s) from interrupted write");
     }
     Ok(store)
+}
+
+/// Maximum slug length (well under filesystem limits, readable in listings).
+const MAX_SLUG_LEN: usize = 60;
+
+/// Convert a free-form choice string into a kebab-case filename stem.
+///
+/// Lowercase, replace non-alphanumeric runs with single hyphens,
+/// trim edges, truncate at a word boundary.
+fn slugify(input: &str) -> String {
+    let mut slug = String::with_capacity(input.len());
+    let mut prev_hyphen = true; // suppress leading hyphen
+
+    for c in input.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+            prev_hyphen = false;
+        } else if !prev_hyphen {
+            slug.push('-');
+            prev_hyphen = true;
+        }
+    }
+
+    // Trim trailing hyphen
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+
+    // Truncate at word boundary if too long
+    if slug.len() > MAX_SLUG_LEN {
+        slug.truncate(MAX_SLUG_LEN);
+        if let Some(last_hyphen) = slug.rfind('-') {
+            slug.truncate(last_hyphen);
+        }
+        // Trim trailing hyphen after truncation
+        while slug.ends_with('-') {
+            slug.pop();
+        }
+    }
+
+    if slug.is_empty() {
+        slug.push_str("decision");
+    }
+
+    slug
+}
+
+/// Find a unique decision filename stem, appending `-2`, `-3`, ... on collision.
+fn unique_decision_stem(store: &Store, base: &str) -> String {
+    if !store.decision_path(base).exists() {
+        return base.to_string();
+    }
+    for n in 2u32.. {
+        let candidate = format!("{base}-{n}");
+        if !store.decision_path(&candidate).exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
 }
 
 // ── init ─────────────────────────────────────────────────────────────────────
@@ -151,6 +212,54 @@ pub fn add_connection(cwd: &Path, from: &str, to: &str) -> Result<()> {
     Ok(())
 }
 
+// ── decide ───────────────────────────────────────────────────────────────────
+
+/// Record a quick decision without the full Socratic flow.
+pub fn decide(
+    cwd: &Path,
+    component: &str,
+    choice: &str,
+    reason: &str,
+    supersedes: Option<&str>,
+) -> Result<()> {
+    let store = open_store(cwd)?;
+    let lock = store.lock()?;
+    let state = store.load_state()?;
+
+    // Validate component exists (or "project" for project-wide)
+    if component != "project" && !state.components.contains_key(component) {
+        return Err(Error::Validation(format!(
+            "component `{component}` does not exist"
+        )));
+    }
+
+    // Validate supersedes target exists
+    if let Some(sup) = supersedes {
+        if !state.decisions.contains_key(sup) {
+            return Err(Error::Validation(format!(
+                "decision `{sup}` does not exist (cannot supersede)"
+            )));
+        }
+    }
+
+    let stem = unique_decision_stem(&store, &slugify(choice));
+
+    let decision = DecisionFile {
+        decision: Decision {
+            component: component.into(),
+            choice: choice.into(),
+            reason: reason.into(),
+            alternatives: vec![],
+            created: Utc::now(),
+            supersedes: supersedes.unwrap_or_default().into(),
+        },
+    };
+
+    store.write_atomic(&lock, &store.decision_path(&stem), &decision)?;
+    println!("Recorded decision `{stem}`");
+    Ok(())
+}
+
 // ── status ───────────────────────────────────────────────────────────────────
 
 /// Print project summary: component count, decision count, any issues.
@@ -209,6 +318,44 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    // ── slugify ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn slugify_basic() {
+        assert_eq!(slugify("Use Redis"), "use-redis");
+        assert_eq!(slugify("JWT with DPoP binding"), "jwt-with-dpop-binding");
+    }
+
+    #[test]
+    fn slugify_special_chars() {
+        assert_eq!(slugify("Result<T, AppError>"), "result-t-apperror");
+        assert_eq!(
+            slugify("429 + retry-after header"),
+            "429-retry-after-header"
+        );
+    }
+
+    #[test]
+    fn slugify_collapses_runs() {
+        assert_eq!(slugify("one   two---three"), "one-two-three");
+        assert_eq!(slugify("---leading"), "leading");
+        assert_eq!(slugify("trailing---"), "trailing");
+    }
+
+    #[test]
+    fn slugify_truncates_at_word_boundary() {
+        let long = "a]".repeat(100); // 200 chars
+        let slug = slugify(&long);
+        assert!(slug.len() <= MAX_SLUG_LEN);
+        assert!(!slug.ends_with('-'));
+    }
+
+    #[test]
+    fn slugify_empty_input() {
+        assert_eq!(slugify(""), "decision");
+        assert_eq!(slugify("!!!"), "decision");
+    }
+
     // ── init ─────────────────────────────────────────────────────────────
 
     #[test]
@@ -266,7 +413,7 @@ mod tests {
     #[test]
     fn init_appends_newline_before_entry_if_missing() {
         let tmp = TempDir::new().unwrap();
-        fs::write(tmp.path().join(".gitignore"), "/target/").unwrap(); // no trailing newline
+        fs::write(tmp.path().join(".gitignore"), "/target/").unwrap();
         init(tmp.path()).unwrap();
 
         let content = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
@@ -403,13 +550,128 @@ mod tests {
         }
     }
 
+    // ── decide ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn decide_records_component_decision() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+        add_component(tmp.path(), "auth").unwrap();
+
+        decide(tmp.path(), "auth", "JWT with DPoP", "Stateless", None).unwrap();
+
+        let store = Store::discover(tmp.path()).unwrap();
+        let dec = store.read_decision("jwt-with-dpop").unwrap();
+        assert_eq!(dec.decision.component, "auth");
+        assert_eq!(dec.decision.choice, "JWT with DPoP");
+        assert_eq!(dec.decision.reason, "Stateless");
+    }
+
+    #[test]
+    fn decide_records_project_wide() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+
+        decide(
+            tmp.path(),
+            "project",
+            "Fail-closed on writes",
+            "Never silently succeed with wrong data",
+            None,
+        )
+        .unwrap();
+
+        let store = Store::discover(tmp.path()).unwrap();
+        let names = store.list_decisions().unwrap();
+        assert_eq!(names.len(), 1);
+
+        let dec = store.read_decision(&names[0]).unwrap();
+        assert_eq!(dec.decision.component, "project");
+    }
+
+    #[test]
+    fn decide_rejects_nonexistent_component() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+
+        let err = decide(tmp.path(), "ghost", "x", "y", None).unwrap_err();
+        match err {
+            Error::Validation(msg) => assert!(msg.contains("ghost")),
+            other => panic!("expected Validation, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn decide_rejects_nonexistent_supersede_target() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+        add_component(tmp.path(), "auth").unwrap();
+
+        let err = decide(tmp.path(), "auth", "x", "y", Some("ghost")).unwrap_err();
+        match err {
+            Error::Validation(msg) => assert!(msg.contains("ghost")),
+            other => panic!("expected Validation, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn decide_supersedes_existing() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+        add_component(tmp.path(), "auth").unwrap();
+
+        decide(tmp.path(), "auth", "Session cookies", "Simple", None).unwrap();
+        decide(
+            tmp.path(),
+            "auth",
+            "JWT tokens",
+            "Stateless",
+            Some("session-cookies"),
+        )
+        .unwrap();
+
+        let store = Store::discover(tmp.path()).unwrap();
+        let dec = store.read_decision("jwt-tokens").unwrap();
+        assert_eq!(dec.decision.supersedes, "session-cookies");
+    }
+
+    #[test]
+    fn decide_deduplicates_filename() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+        add_component(tmp.path(), "auth").unwrap();
+
+        decide(tmp.path(), "auth", "Use Redis", "Fast", None).unwrap();
+        decide(tmp.path(), "auth", "Use Redis", "Also for sessions", None).unwrap();
+
+        let store = Store::discover(tmp.path()).unwrap();
+        let names = store.list_decisions().unwrap();
+        assert_eq!(names, vec!["use-redis", "use-redis-2"]);
+    }
+
+    #[test]
+    fn decide_sets_timestamp() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+        add_component(tmp.path(), "auth").unwrap();
+
+        let before = Utc::now();
+        decide(tmp.path(), "auth", "JWT", "Stateless", None).unwrap();
+        let after = Utc::now();
+
+        let store = Store::discover(tmp.path()).unwrap();
+        let dec = store.read_decision("jwt").unwrap();
+        assert!(dec.decision.created >= before);
+        assert!(dec.decision.created <= after);
+    }
+
     // ── status ───────────────────────────────────────────────────────────
 
     #[test]
     fn status_on_empty_project() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
-        status(tmp.path()).unwrap(); // should not panic or error
+        status(tmp.path()).unwrap();
     }
 
     #[test]
@@ -439,7 +701,6 @@ mod tests {
         init(tmp.path()).unwrap();
         add_component(tmp.path(), "auth").unwrap();
 
-        // Simulate hand-editing: add a dangling connection
         let path = tmp
             .path()
             .join(STORE_DIR)
@@ -456,7 +717,7 @@ mod tests {
     // ── full bootstrap sequence ──────────────────────────────────────────
 
     #[test]
-    fn bootstrap_sequence() {
+    fn bootstrap_sequence_with_decisions() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
 
@@ -474,12 +735,45 @@ mod tests {
         add_connection(tmp.path(), "conversation", "decision-store").unwrap();
         add_connection(tmp.path(), "map-server", "decision-store").unwrap();
 
+        decide(
+            tmp.path(),
+            "project",
+            "Rust, single binary",
+            "No runtime deps, CLI + servers in one artifact",
+            None,
+        )
+        .unwrap();
+        decide(
+            tmp.path(),
+            "project",
+            "Fail-closed on writes",
+            "Never silently succeed with wrong data",
+            None,
+        )
+        .unwrap();
+        decide(
+            tmp.path(),
+            "decision-store",
+            "TOML with serde derive",
+            "Human-readable, git-diffable, hand-editable",
+            None,
+        )
+        .unwrap();
+        decide(
+            tmp.path(),
+            "cli",
+            "clap derive API",
+            "Type-safe, zero boilerplate",
+            None,
+        )
+        .unwrap();
+
         check(tmp.path()).unwrap();
-        status(tmp.path()).unwrap();
 
         let store = Store::discover(tmp.path()).unwrap();
         let state = store.load_state().unwrap();
         assert_eq!(state.components.len(), 5);
+        assert_eq!(state.decisions.len(), 4);
         assert!(state.validate().is_empty());
     }
 }

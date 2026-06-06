@@ -57,7 +57,7 @@ pub enum Command {
 
     /// Record a quick decision without the full Socratic flow.
     Decide {
-        /// Component this decision belongs to.
+        /// Component this decision belongs to (or "project" for project-wide).
         component: String,
 
         /// What was decided.
@@ -148,7 +148,12 @@ pub fn run(cli: Cli) -> Result<()> {
             RemoveCommand::Decision { .. } => not_implemented("remove decision"),
         },
         Command::Design { .. } => not_implemented("design"),
-        Command::Decide { .. } => not_implemented("decide"),
+        Command::Decide {
+            component,
+            choice,
+            reason,
+            supersedes,
+        } => commands::decide(&cwd, &component, &choice, &reason, supersedes.as_deref()),
         Command::Serve => not_implemented("serve"),
         Command::Map => not_implemented("map"),
         Command::Status => commands::status(&cwd),
