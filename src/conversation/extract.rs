@@ -113,13 +113,7 @@ pub(crate) fn record_decision(
     // Insert into in-memory state for validation.
     state.decisions.insert(stem.clone(), decision);
 
-    if let Err(e) = commands::validate_mutation(state) {
-        state.decisions.remove(&stem);
-        state.graph_index = graph_snapshot;
-        return Err(e);
-    }
-
-    if let Err(e) = store.commit_batch(&lock, vec![write], vec![], Some(&state.graph_index)) {
+    if let Err(e) = store.commit_with_graph(&lock, vec![write], vec![], state) {
         state.decisions.remove(&stem);
         state.graph_index = graph_snapshot;
         return Err(e);

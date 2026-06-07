@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -52,10 +53,12 @@ pub(crate) fn get_context(
         &patterns,
     );
 
-    let status = if component_decisions.is_empty() && project_decisions.is_empty() {
-        "not_covered"
-    } else {
+    let status = if !component_decisions.is_empty() {
         "covered"
+    } else if !project_decisions.is_empty() {
+        "partially_covered"
+    } else {
+        "not_covered"
     };
 
     Ok(serde_json::json!({
@@ -261,6 +264,25 @@ pub(crate) fn check_pattern(state: &ProjectState, description: &str) -> Value {
     // Pattern members first, then by score descending.
     matches.sort_by(|a, b| b.in_pattern.cmp(&a.in_pattern).then(b.score.cmp(&a.score)));
 
+    // Collect patterns from matched decisions via MemberOf reverse edges.
+    let mut matched_patterns: Vec<Value> = Vec::new();
+    let mut seen_patterns: HashSet<String> = HashSet::new();
+    for m in &matches {
+        for (other, edge, dir) in graph.edges_involving(m.name) {
+            if edge.kind == EdgeKind::MemberOf && dir == Direction::Reverse {
+                let pat_name = other.to_string();
+                if seen_patterns.insert(pat_name.clone()) {
+                    if let Some(pat) = state.patterns.get(&pat_name) {
+                        matched_patterns.push(serde_json::json!({
+                            "name": pat_name,
+                            "description": pat.pattern.description,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
     if matches.is_empty() {
         serde_json::json!({
             "status": "not_covered",
@@ -268,6 +290,7 @@ pub(crate) fn check_pattern(state: &ProjectState, description: &str) -> Value {
                         developer run `trurl design <component>` to make \
                         architectural decisions before proceeding.",
             "decisions": [],
+            "patterns": [],
         })
     } else {
         serde_json::json!({
@@ -281,6 +304,7 @@ pub(crate) fn check_pattern(state: &ProjectState, description: &str) -> Value {
                     "reason": m.dec.decision.reason,
                 })
             }).collect::<Vec<_>>(),
+            "patterns": matched_patterns,
         })
     }
 }
@@ -700,6 +724,14 @@ mod tests {
     }
 
     #[test]
+    fn get_context_partially_covered_with_only_project_rules() {
+        let state = test_state();
+        // rate-limiter has no component-specific decisions but project has rules.
+        let result = get_context(&state, "rate-limiter", None).unwrap();
+        assert_eq!(result["status"], "partially_covered");
+    }
+
+    #[test]
     fn get_context_rejects_nonexistent_component() {
         let state = test_state();
         let err = get_context(&state, "nonexistent", None).unwrap_err();
@@ -770,6 +802,8 @@ mod tests {
         assert_eq!(result["status"], "not_covered");
         let decisions = result["decisions"].as_array().unwrap();
         assert!(decisions.is_empty());
+        let patterns = result["patterns"].as_array().unwrap();
+        assert!(patterns.is_empty());
     }
 
     #[test]
@@ -797,6 +831,45 @@ mod tests {
         assert_eq!(result["status"], "covered");
         let decisions = result["decisions"].as_array().unwrap();
         assert_eq!(decisions[0]["name"], "use-jwt");
+    }
+
+    #[test]
+    fn check_pattern_returns_matched_patterns() {
+        let mut state = test_state();
+
+        // Add a pattern with MemberOf edges.
+        state.patterns.insert(
+            "auth-pattern".into(),
+            PatternFile {
+                pattern: Pattern {
+                    name: "auth-pattern".into(),
+                    description: "Stateless auth via JWT".into(),
+                },
+            },
+        );
+        state.graph_index.nodes.push(NodeEntry {
+            name: "auth-pattern".into(),
+            kind: NodeKind::Pattern,
+            tags: vec![],
+            hash: String::new(),
+        });
+        state.graph_index.edges.push(EdgeEntry {
+            from: "auth-pattern".into(),
+            to: "use-jwt".into(),
+            kind: EdgeKind::MemberOf,
+        });
+        state.graph_index.edges.push(EdgeEntry {
+            from: "auth-pattern".into(),
+            to: "error-strategy".into(),
+            kind: EdgeKind::MemberOf,
+        });
+
+        let result = check_pattern(&state, "JWT authentication tokens");
+        assert_eq!(result["status"], "covered");
+        let patterns = result["patterns"].as_array().unwrap();
+        assert_eq!(patterns.len(), 1);
+        assert_eq!(patterns[0]["name"], "auth-pattern");
+        assert_eq!(patterns[0]["description"], "Stateless auth via JWT");
     }
 
     // ── get_architecture ────────────────────────────────────────────────

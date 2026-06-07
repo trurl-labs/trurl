@@ -7,7 +7,9 @@ use serde::de::DeserializeOwned;
 
 use crate::{Error, Result};
 
+use super::graph::Severity;
 use super::schema::GraphIndex;
+use super::state::ProjectState;
 use super::{Store, StoreLock};
 
 // ── PendingWrite ─────────────────────────────────────────────────────────────
@@ -231,6 +233,36 @@ impl Store {
         }
 
         Ok(())
+    }
+
+    /// Validate the full graph derived from `state`, then commit node files
+    /// and a normalized `graph.toml` in one atomic transaction.
+    ///
+    /// This is the primary write path for all graph-mutating operations.
+    /// It builds an [`InMemoryGraph`] from the current state, runs all
+    /// validation checks, and — only if the graph is error-free — exports
+    /// a deterministically sorted index and commits it alongside the
+    /// provided node file writes. `graph.toml` is renamed last, serving
+    /// as the commit point per the storage spec.
+    pub fn commit_with_graph(
+        &self,
+        lock: &StoreLock,
+        writes: Vec<PendingWrite>,
+        removes: Vec<PathBuf>,
+        state: &ProjectState,
+    ) -> Result<()> {
+        let graph = state.build_graph();
+        let issues = graph.validate();
+        let errors: Vec<&str> = issues
+            .iter()
+            .filter(|i| i.severity == Severity::Error)
+            .map(|i| i.message.as_str())
+            .collect();
+        if !errors.is_empty() {
+            return Err(Error::GraphIntegrity(errors.join("; ")));
+        }
+        let index = graph.to_index();
+        self.commit_batch(lock, writes, removes, Some(&index))
     }
 
     pub fn remove_file(&self, _lock: &StoreLock, target: &Path) -> Result<()> {
@@ -535,6 +567,122 @@ mod tests {
             .unwrap();
         assert_eq!(w1.content_hash(), w2.content_hash());
         assert_eq!(w1.content_hash().len(), 64);
+    }
+
+    // ── commit_with_graph ────────────────────────────────────────────────
+
+    #[test]
+    fn commit_with_graph_validates_and_writes() {
+        use crate::store::schema::*;
+
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store(tmp.path());
+        let lock = store.lock().unwrap();
+
+        let comp = sample_component("auth");
+        let write = store
+            .prepare_write(&store.component_path("auth"), &comp)
+            .unwrap();
+        let hash = write.content_hash();
+
+        let mut state = store.load_state().unwrap();
+        state.graph_index.nodes.push(NodeEntry {
+            name: "auth".into(),
+            kind: NodeKind::Component,
+            tags: vec![],
+            hash,
+        });
+        state.components.insert("auth".into(), comp);
+
+        store
+            .commit_with_graph(&lock, vec![write], vec![], &state)
+            .unwrap();
+
+        assert!(store.component_path("auth").exists());
+
+        let index: GraphIndex =
+            toml::from_str(&fs::read_to_string(store.graph_path()).unwrap()).unwrap();
+        assert!(index.nodes.iter().any(|n| n.name == "auth"));
+    }
+
+    #[test]
+    fn commit_with_graph_rejects_invalid_graph() {
+        use crate::store::schema::*;
+
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store(tmp.path());
+        let lock = store.lock().unwrap();
+
+        let mut state = store.load_state().unwrap();
+        state.graph_index.nodes.push(NodeEntry {
+            name: "orphan".into(),
+            kind: NodeKind::Decision,
+            tags: vec![],
+            hash: "fake".into(),
+        });
+        state.graph_index.edges.push(EdgeEntry {
+            from: "orphan".into(),
+            to: "nonexistent".into(),
+            kind: EdgeKind::BelongsTo,
+        });
+        state
+            .decisions
+            .insert("orphan".into(), sample_decision("orphan", "nonexistent"));
+
+        let err = store
+            .commit_with_graph(&lock, vec![], vec![], &state)
+            .unwrap_err();
+        assert!(matches!(err, Error::GraphIntegrity(_)));
+    }
+
+    #[test]
+    fn commit_with_graph_normalizes_index() {
+        use crate::store::schema::*;
+
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store(tmp.path());
+        let lock = store.lock().unwrap();
+
+        let c1 = sample_component("z-comp");
+        let w1 = store
+            .prepare_write(&store.component_path("z-comp"), &c1)
+            .unwrap();
+        let c2 = sample_component("a-comp");
+        let w2 = store
+            .prepare_write(&store.component_path("a-comp"), &c2)
+            .unwrap();
+
+        let mut state = store.load_state().unwrap();
+        // Push in reverse-alphabetical order.
+        state.graph_index.nodes.push(NodeEntry {
+            name: "z-comp".into(),
+            kind: NodeKind::Component,
+            tags: vec![],
+            hash: w1.content_hash(),
+        });
+        state.graph_index.nodes.push(NodeEntry {
+            name: "a-comp".into(),
+            kind: NodeKind::Component,
+            tags: vec![],
+            hash: w2.content_hash(),
+        });
+        state.graph_index.edges.push(EdgeEntry {
+            from: "z-comp".into(),
+            to: "a-comp".into(),
+            kind: EdgeKind::ConnectsTo,
+        });
+        state.components.insert("z-comp".into(), c1);
+        state.components.insert("a-comp".into(), c2);
+
+        store
+            .commit_with_graph(&lock, vec![w1, w2], vec![], &state)
+            .unwrap();
+
+        let index: GraphIndex =
+            toml::from_str(&fs::read_to_string(store.graph_path()).unwrap()).unwrap();
+        let names: Vec<&str> = index.nodes.iter().map(|n| n.name.as_str()).collect();
+        // Should be sorted regardless of insertion order.
+        assert_eq!(names[0], "a-comp");
     }
 
     // ── remove_file ──────────────────────────────────────────────────────

@@ -57,20 +57,6 @@ pub(crate) fn open_store_mut(cwd: &Path) -> Result<(Store, store::StoreLock, Pro
     Ok((store, lock, state))
 }
 
-pub(crate) fn validate_mutation(state: &ProjectState) -> Result<()> {
-    let issues = state.validate();
-    let errors: Vec<&str> = issues
-        .iter()
-        .filter(|i| i.severity == crate::store::graph::Severity::Error)
-        .map(|i| i.message.as_str())
-        .collect();
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(Error::GraphIntegrity(errors.join("; ")))
-    }
-}
-
 const MAX_SLUG_LEN: usize = 60;
 
 pub(crate) fn slugify(input: &str) -> String {

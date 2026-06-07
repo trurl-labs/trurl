@@ -5,7 +5,7 @@ use crate::store::schema::{Component, ComponentFile, EdgeEntry, EdgeKind, NodeEn
 use crate::store::{self};
 use crate::{Error, Result};
 
-use super::{open_store_mut, validate_mutation};
+use super::open_store_mut;
 
 pub fn add_component(cwd: &Path, name: &str, description: Option<&str>) -> Result<()> {
     if !store::is_valid_kebab_case(name) {
@@ -38,9 +38,8 @@ pub fn add_component(cwd: &Path, name: &str, description: Option<&str>) -> Resul
     });
 
     state.components.insert(name.into(), comp);
-    validate_mutation(&state)?;
 
-    store.commit_batch(&lock, vec![write], vec![], Some(&state.graph_index))?;
+    store.commit_with_graph(&lock, vec![write], vec![], &state)?;
     println!("Added component `{name}`");
     Ok(())
 }
@@ -81,10 +80,8 @@ pub fn add_connection(cwd: &Path, from: &str, to: &str) -> Result<()> {
         kind: EdgeKind::ConnectsTo,
     });
 
-    validate_mutation(&state)?;
-
     // Only graph.toml changes — no node files modified.
-    store.commit_batch(&lock, vec![], vec![], Some(&state.graph_index))?;
+    store.commit_with_graph(&lock, vec![], vec![], &state)?;
     println!("Connected `{from}` → `{to}`");
     Ok(())
 }
@@ -145,16 +142,12 @@ pub fn rename_component(cwd: &Path, old: &str, new: &str) -> Result<()> {
         }
     }
 
-    validate_mutation(&state)?;
-
-    // Prepare writes.
+    // Prepare writes and update hashes.
     let mut writes = Vec::new();
 
     let comp_write = store.prepare_write(&store.component_path(new), &state.components[new])?;
-    // Update hash for renamed component.
-    let new_hash = comp_write.content_hash();
     if let Some(node) = state.graph_index.nodes.iter_mut().find(|n| n.name == new) {
-        node.hash = new_hash;
+        node.hash = comp_write.content_hash();
     }
     writes.push(comp_write);
 
@@ -163,20 +156,19 @@ pub fn rename_component(cwd: &Path, old: &str, new: &str) -> Result<()> {
             &store.decision_path(dname),
             &state.decisions[dname.as_str()],
         )?;
-        let dec_hash = dec_write.content_hash();
         if let Some(node) = state
             .graph_index
             .nodes
             .iter_mut()
             .find(|n| n.name == *dname)
         {
-            node.hash = dec_hash;
+            node.hash = dec_write.content_hash();
         }
         writes.push(dec_write);
     }
 
     let removes = vec![store.component_path(old)];
-    store.commit_batch(&lock, writes, removes, Some(&state.graph_index))?;
+    store.commit_with_graph(&lock, writes, removes, &state)?;
     println!("Renamed component `{old}` → `{new}`");
     Ok(())
 }
@@ -241,10 +233,8 @@ pub fn remove_component(cwd: &Path, name: &str) -> Result<()> {
         .edges
         .retain(|e| e.from != name && e.to != name);
 
-    validate_mutation(&state)?;
-
     let removes = vec![store.component_path(name)];
-    store.commit_batch(&lock, vec![], removes, Some(&state.graph_index))?;
+    store.commit_with_graph(&lock, vec![], removes, &state)?;
     println!("Removed component `{name}`");
     Ok(())
 }

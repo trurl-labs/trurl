@@ -7,7 +7,7 @@ use crate::store::schema::{Decision, DecisionFile, EdgeEntry, EdgeKind, NodeEntr
 use crate::store::{self};
 use crate::{Error, Result};
 
-use super::{open_store_mut, slugify, unique_decision_stem, validate_mutation};
+use super::{open_store_mut, slugify, unique_decision_stem};
 
 pub fn decide(
     cwd: &Path,
@@ -77,9 +77,8 @@ pub fn decide(
     }
 
     state.decisions.insert(stem.clone(), decision);
-    validate_mutation(&state)?;
 
-    store.commit_batch(&lock, vec![write], vec![], Some(&state.graph_index))?;
+    store.commit_with_graph(&lock, vec![write], vec![], &state)?;
     println!("Recorded decision `{stem}`");
     Ok(())
 }
@@ -149,10 +148,8 @@ pub fn remove_decision(cwd: &Path, name: &str) -> Result<()> {
         .edges
         .retain(|e| e.from != name && e.to != name);
 
-    validate_mutation(&state)?;
-
     let removes = vec![store.decision_path(name)];
-    store.commit_batch(&lock, vec![], removes, Some(&state.graph_index))?;
+    store.commit_with_graph(&lock, vec![], removes, &state)?;
     println!("Removed decision `{name}`");
     Ok(())
 }

@@ -126,6 +126,17 @@ impl Store {
     /// this check should never fire in correct code. It guards against
     /// programming errors that would write or delete files outside `.trurl/`.
     fn verify_path(&self, path: &Path) -> Result<()> {
+        // Reject parent-directory components before the prefix check.
+        // `starts_with` on non-canonicalized paths does not prevent
+        // traversal via `..` segments (e.g. `/root/../etc/shadow`).
+        for component in path.components() {
+            if component == std::path::Component::ParentDir {
+                return Err(Error::Validation(format!(
+                    "path contains parent-directory traversal: {}",
+                    path.display()
+                )));
+            }
+        }
         if path.starts_with(&self.root) {
             Ok(())
         } else {
@@ -306,17 +317,22 @@ impl Store {
             }
         };
 
+        // Build lookup from existing index for O(1) tag preservation.
+        let existing_tags: std::collections::HashMap<&str, &[String]> = existing
+            .nodes
+            .iter()
+            .map(|n| (n.name.as_str(), n.tags.as_slice()))
+            .collect();
+
         // Build node list from actual files, preserving tags from existing index.
         let mut nodes = Vec::new();
 
         // Project virtual node.
         let project_path = self.root.join("project.toml");
         let project_hash = hash_file(&project_path)?;
-        let project_tags = existing
-            .nodes
-            .iter()
-            .find(|n| n.name == "project")
-            .map(|n| n.tags.clone())
+        let project_tags = existing_tags
+            .get("project")
+            .map(|t| t.to_vec())
             .unwrap_or_default();
         nodes.push(NodeEntry {
             name: "project".into(),
@@ -327,11 +343,9 @@ impl Store {
 
         for name in components.keys() {
             let hash = hash_file(&self.component_path(name))?;
-            let tags = existing
-                .nodes
-                .iter()
-                .find(|n| n.name == *name)
-                .map(|n| n.tags.clone())
+            let tags = existing_tags
+                .get(name.as_str())
+                .map(|t| t.to_vec())
                 .unwrap_or_default();
             nodes.push(NodeEntry {
                 name: name.clone(),
@@ -343,11 +357,9 @@ impl Store {
 
         for name in decisions.keys() {
             let hash = hash_file(&self.decision_path(name))?;
-            let tags = existing
-                .nodes
-                .iter()
-                .find(|n| n.name == *name)
-                .map(|n| n.tags.clone())
+            let tags = existing_tags
+                .get(name.as_str())
+                .map(|t| t.to_vec())
                 .unwrap_or_default();
             nodes.push(NodeEntry {
                 name: name.clone(),
@@ -359,11 +371,9 @@ impl Store {
 
         for name in patterns.keys() {
             let hash = hash_file(&self.pattern_path(name))?;
-            let tags = existing
-                .nodes
-                .iter()
-                .find(|n| n.name == *name)
-                .map(|n| n.tags.clone())
+            let tags = existing_tags
+                .get(name.as_str())
+                .map(|t| t.to_vec())
                 .unwrap_or_default();
             nodes.push(NodeEntry {
                 name: name.clone(),
@@ -826,6 +836,23 @@ mod tests {
         let outside = tmp.path().join("outside.toml");
         let err = store.verify_path(&outside).unwrap_err();
         assert!(matches!(err, Error::Validation(_)));
+    }
+
+    #[test]
+    fn verify_path_rejects_traversal() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store(tmp.path());
+        let traversal = store.root().join("..").join("escape.toml");
+        let err = store.verify_path(&traversal).unwrap_err();
+        match err {
+            Error::Validation(msg) => {
+                assert!(
+                    msg.contains("parent-directory"),
+                    "should mention traversal: {msg}"
+                );
+            }
+            other => panic!("expected Validation, got: {other}"),
+        }
     }
 
     // ── compare_versions ─────────────────────────────────────────────────
