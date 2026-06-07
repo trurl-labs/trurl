@@ -1,4 +1,4 @@
-.PHONY: fmt check test ci setup clean build build-release
+.PHONY: fmt check test audit ci setup clean build build-release
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
@@ -29,9 +29,14 @@ check:
 test:
 	cargo test --workspace --locked
 
+# ── Audit (requires: cargo install cargo-deny) ───────────────────────────────
+
+audit:
+	cargo deny check
+
 # ── CI gate (run before pushing) ──────────────────────────────────────────────
 
-ci: check test
+ci: check test audit
 	@echo "  ✓ All checks passed"
 
 # ── Clean ─────────────────────────────────────────────────────────────────────

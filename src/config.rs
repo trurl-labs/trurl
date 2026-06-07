@@ -219,11 +219,10 @@ fn resolve_provider_choice(
     }
 
     // Config default
-    if let Some(cfg) = config {
-        if let Some(ref default) = cfg.default_provider {
+    if let Some(cfg) = config
+        && let Some(ref default) = cfg.default_provider {
             return parse_provider(default);
         }
-    }
 
     // Auto-detect: exactly one key must be available
     auto_detect_provider(config, env_keys)
@@ -270,11 +269,10 @@ fn resolve_key(
         return Ok(ApiKey::new(val.to_string()));
     }
 
-    if let Some(cfg) = config {
-        if let Some(val) = cfg.key_for(provider) {
+    if let Some(cfg) = config
+        && let Some(val) = cfg.key_for(provider) {
             return Ok(ApiKey::new(val.to_string()));
         }
-    }
 
     let path_hint = config_file_path()
         .map(|p| format!(" or add `{}_api_key` to {}", provider.name(), p.display()))

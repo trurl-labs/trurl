@@ -1,6 +1,6 @@
 # Contributing to Trurl
 
-Trurl is a developer tool that stores architectural decisions and serves them to AI coding agents. Contributions should maintain the same engineering standards the tool itself promotes: intentional decisions, clean code, and consistency.
+Trurl stores architectural decisions and serves them to AI coding agents. Contributions should maintain the same engineering standards the tool itself promotes: intentional decisions, clean code, consistency.
 
 ## Reporting bugs and security issues
 
@@ -8,13 +8,15 @@ Trurl is a developer tool that stores architectural decisions and serves them to
 
 **Bugs** — open a GitHub issue with your Trurl version (`trurl --version`), Rust version (`rustc --version`), platform, and minimal reproduction steps.
 
-**Feature requests** — open an issue describing the use case before writing code. For changes to the `.trurl/` format, the MCP protocol, or the decision schema, wait for maintainer feedback — these have compatibility implications.
+**Feature requests** — open an issue describing the use case before writing code. Changes to the `.trurl/` format, the MCP tool surface, or the decision schema have compatibility implications — wait for maintainer feedback.
 
 ## Development setup
 
-**Prerequisites:**
+**Prerequisites:** Rust 1.88+ (`rustup update stable`), `make`, and `cargo-deny`:
 
-Rust 1.88+ (`rustup update stable`) and `make`.
+```bash
+cargo install cargo-deny
+```
 
 **First-time setup:**
 
@@ -26,15 +28,13 @@ cargo build
 cargo test
 ```
 
-**Faster linker (optional):**
-
-On Linux, `mold` cuts incremental link times significantly:
+**Faster linker (optional, Linux):**
 
 ```bash
 sudo apt install clang mold
 ```
 
-Add to your personal `~/.cargo/config.toml`:
+Add to `~/.cargo/config.toml`:
 
 ```toml
 [target.x86_64-unknown-linux-gnu]
@@ -42,116 +42,85 @@ linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 ```
 
-## Running the tests
+## Running checks
 
 ```bash
 make test       # unit + integration tests
-make check      # cargo fmt --check + clippy
-make ci         # full local gate: check + test (run before pushing)
+make check      # cargo fmt --check + clippy -D warnings
+make audit      # cargo deny check (advisories, licenses, bans, sources)
+make ci         # all of the above — run before pushing
 ```
 
-**Running a single test:**
+**Single test:**
 
 ```bash
-cargo test -p trurl -- decision_store::tests::atomic_write
-```
-
-**Running with logs:**
-
-```bash
-RUST_LOG=debug cargo test 2>&1 | less
+cargo test -- remove_decision_allows_with_constrains_edge
 ```
 
 ## Making changes
 
-1. Fork the repo and create a branch from `main`: `git checkout -b feat/my-feature`.
-2. Make your changes. Add tests for non-trivial features.
-3. Run `make fmt` to auto-format.
-4. Run `make ci` to verify everything passes.
+1. Branch from `main`: `git checkout -b feat/my-feature`.
+2. Make changes. Add tests for non-trivial behavior.
+3. `make fmt` to auto-format.
+4. `make ci` to verify.
 5. Commit using [conventional commits](#commit-conventions).
 6. Open a PR against `main`.
 
-## Project structure
-
-```
-src/
-├── main.rs              # CLI entry point (clap)
-├── store/               # .trurl/ file operations, schema, validation
-├── mcp/                 # MCP server, decision retrieval, spec assembly
-├── conversation/        # Socratic design flow, Claude API client
-├── map/                 # Map web server, API, static assets
-└── common/              # Shared types, atomic writes, file locking
-```
-
-The internal dependency direction is intentional: `store` has no dependencies on other modules. `mcp` and `conversation` depend on `store`. `map` depends on `store`. Nothing depends on `main`.
-
-## Working on the decision store
+## Working on the store
 
 The `.trurl/` format is the foundation. Changes to schemas or file operations require extra care:
 
-- All writes must use `write_atomic()` — write to `.state/tmp/`, validate, then rename. Never write directly to target files.
-- All mutations validate full referential integrity before committing (decision references existing component, connection references existing endpoints, etc.).
-- Schema changes must consider forward/backward compatibility. Bump `trurl_version` in `project.toml` for breaking format changes.
-- Add property tests for any new validation logic.
+- All writes use `commit_with_graph` — validates the full graph before touching disk.
+- Atomic protocol: serialize → tmp file → verify round-trip → rename. `graph.toml` renamed last.
+- Schema changes must bump `FORMAT_VERSION` in `schema.rs`.
+- The graph module (`graph.rs`) is pure — no I/O, fully testable with in-memory fixtures.
 
 ## Working on the MCP server
 
-The MCP server assembles specs from stored decisions. When changing response formats:
+The MCP server assembles specs from stored decisions.
 
-- The `brief` field must use authoritative language (MUST / DO NOT) — these are constraints, not suggestions.
-- Test with a real coding agent (Claude Code or Cursor) to verify the response actually constrains generation.
-- Selective retrieval must remain focused — return only relevant decisions, not everything.
+- The `brief` field uses authoritative language (MUST / DO NOT) — constraints, not suggestions.
+- Write tools validate input sizes, check reserved names, and run full graph validation before committing.
+- The server uses `Arc<RwLock<ProjectState>>` shared with a file watcher thread. Tool calls hold the write lock. Keep tool execution fast (<50ms for writes).
+- Test with a real MCP client to verify response format.
 
 ## Working on the conversation engine
 
-The Socratic design flow powers `trurl design`. When changing the question flow:
+The Socratic design flow powers `trurl design`.
 
-- Each user answer must write a decision to `.trurl/` immediately — no batching. If the process crashes, no answers are lost.
-- Questions should make the user think, not give recommendations. "What matters more — latency or durability?" not "I suggest Redis."
-- Test with `--continue` to ensure conversation state resumes correctly.
+- Each user answer writes a decision immediately — no batching. Crash-safe by design.
+- After recording a decision, `state.rebuild_graph()` must be called to keep the graph cache consistent for subsequent writes in the same session.
+- Questions should make the user think. "What matters more — latency or durability?" not "I suggest Redis."
+- Test with `--continue` to verify session resume.
 
 ## Commit conventions
 
-We use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
+[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
 
 ```
 <type>(<scope>): <description>
 ```
 
-Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`.
+Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`, `security`.
 
-Scope is optional but helpful: `store`, `mcp`, `conversation`, `map`, `cli`.
+Scopes: `store`, `mcp`, `conversation`, `provider`, `cli`.
 
 ```
-feat(mcp): add related decisions from connected components to get_context response
-
+feat(mcp): add related decisions from connected components to get_context
 fix(store): validate component references before writing decision
-
-refactor(conversation): extract question generation into separate module
-
-docs: add MCP integration guide for Claude Code
+security(mcp): bound SSE stream accumulation
+perf(store): single-pass file I/O in load_state
 ```
 
-Breaking changes must include `BREAKING CHANGE:` in the footer.
+Breaking changes: `BREAKING CHANGE:` in the commit footer.
 
 ## Pull request checklist
-
-Before marking a PR ready for review:
 
 - [ ] `make ci` passes locally
 - [ ] New behavior has tests
 - [ ] PR description explains *why*, not just *what*
-- [ ] Schema changes bump `trurl_version` if breaking
-- [ ] `CHANGELOG.md` updated under `[Unreleased]` for user-visible changes
+- [ ] Schema changes bump `FORMAT_VERSION`
 
 ## Code style
 
-`make fmt` handles formatting and auto-fixable lints. Clippy is configured to deny warnings. Prefer explicit error types (`thiserror`) over `anyhow` in library code. Every public function has a doc comment. No `unwrap()` in production code paths — use proper error handling.
-
-## Dogfooding
-
-Trurl is built with Trurl. The repo has its own `.trurl/` directory with architectural decisions. When contributing a significant feature:
-
-1. Check existing decisions with `trurl status`
-2. If your change introduces a new pattern, run `trurl design` first
-3. Record your architectural decisions — they help future contributors understand why
+`make fmt` handles formatting and auto-fixable lints. Clippy denies warnings. `thiserror` for error types. Every public function documented. No `unwrap()` or `expect()` in production code — the crate enforces this via `#![deny(clippy::unwrap_used, clippy::expect_used)]`.

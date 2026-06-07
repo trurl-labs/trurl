@@ -22,12 +22,12 @@ pub(crate) fn extract_decisions(response: &str) -> Vec<ExtractedDecision> {
         if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
             continue;
         }
-        if let Ok(json) = serde_json::from_str::<Value>(trimmed) {
-            if let (Some(choice), Some(reason)) = (
+        if let Ok(json) = serde_json::from_str::<Value>(trimmed)
+            && let (Some(choice), Some(reason)) = (
                 json.get("choice").and_then(|v| v.as_str()),
                 json.get("reason").and_then(|v| v.as_str()),
-            ) {
-                if !choice.is_empty() && !reason.is_empty() {
+            )
+                && !choice.is_empty() && !reason.is_empty() {
                     let alternatives = json
                         .get("alternatives")
                         .and_then(|v| v.as_array())
@@ -46,8 +46,6 @@ pub(crate) fn extract_decisions(response: &str) -> Vec<ExtractedDecision> {
                         alternatives,
                     });
                 }
-            }
-        }
     }
 
     decisions

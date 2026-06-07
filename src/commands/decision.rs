@@ -29,13 +29,12 @@ pub fn decide(
         )));
     }
 
-    if let Some(sup) = supersedes {
-        if !state.decisions.contains_key(sup) {
+    if let Some(sup) = supersedes
+        && !state.decisions.contains_key(sup) {
             return Err(Error::Validation(format!(
                 "decision `{sup}` does not exist (cannot supersede)"
             )));
         }
-    }
 
     let stem = unique_decision_stem(&state.decisions, &slugify(choice))?;
 

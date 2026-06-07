@@ -52,12 +52,11 @@ pub(crate) fn run_server(store: Store, initial_state: ProjectState) -> Result<()
     loop {
         match protocol::read_message(&mut reader) {
             Ok(Some(request)) => {
-                if let Some(response) = handle(&store, &state, request, &mut initialized) {
-                    if let Err(e) = protocol::write_response(&mut writer, &response) {
+                if let Some(response) = handle(&store, &state, request, &mut initialized)
+                    && let Err(e) = protocol::write_response(&mut writer, &response) {
                         eprintln!("trurl: stdout write error: {e}");
                         break;
                     }
-                }
             }
             Ok(None) => break, // EOF — clean shutdown
             Err(e) => {
