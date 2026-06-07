@@ -65,6 +65,7 @@ struct RpcError {
 // ── Standard error codes (JSON-RPC 2.0 §5.1) ─────────────────────────────
 
 pub(crate) const PARSE_ERROR: i32 = -32700;
+pub(crate) const INVALID_REQUEST: i32 = -32600;
 pub(crate) const METHOD_NOT_FOUND: i32 = -32601;
 pub(crate) const INVALID_PARAMS: i32 = -32602;
 

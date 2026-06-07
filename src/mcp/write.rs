@@ -12,6 +12,47 @@ use crate::store::{self, Store};
 
 // ── Argument helpers ────────────────────────────────────────────────────────
 
+// Input size limits — prevents disk/memory exhaustion from oversized fields.
+const MAX_SHORT_TEXT: usize = 500;
+const MAX_LONG_TEXT: usize = 4000;
+const MAX_NAME: usize = 200;
+const MAX_ARRAY_ITEMS: usize = 50;
+const MAX_PATTERN_DECISIONS: usize = 100;
+
+fn validate_len(value: &str, field: &str, max: usize) -> Result<(), String> {
+    if value.len() > max {
+        Err(format!(
+            "{field} exceeds maximum length ({} bytes, limit {max})",
+            value.len()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_array_len(arr: &[String], field: &str, max: usize) -> Result<(), String> {
+    if arr.len() > max {
+        Err(format!(
+            "{field} has too many items ({}, limit {max})",
+            arr.len()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_item_lens(arr: &[String], field: &str, max: usize) -> Result<(), String> {
+    for (i, item) in arr.iter().enumerate() {
+        if item.len() > max {
+            return Err(format!(
+                "{field}[{i}] exceeds maximum length ({} bytes, limit {max})",
+                item.len()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
         .and_then(|v| v.as_str())
@@ -89,6 +130,17 @@ pub(crate) fn record_decision(
     let constrains = opt_str_array(args, "constrains");
     let tags = opt_str_array(args, "tags");
     let supersedes = opt_str(args, "supersedes");
+
+    // Validate field sizes.
+    validate_len(component, "component", MAX_NAME)?;
+    validate_len(choice, "choice", MAX_SHORT_TEXT)?;
+    validate_len(reason, "reason", MAX_LONG_TEXT)?;
+    validate_array_len(&alternatives, "alternatives", MAX_ARRAY_ITEMS)?;
+    validate_item_lens(&alternatives, "alternatives", MAX_SHORT_TEXT)?;
+    validate_array_len(&depends_on, "depends_on", MAX_ARRAY_ITEMS)?;
+    validate_array_len(&constrains, "constrains", MAX_ARRAY_ITEMS)?;
+    validate_array_len(&tags, "tags", MAX_ARRAY_ITEMS)?;
+    validate_item_lens(&tags, "tags", MAX_NAME)?;
 
     // Validate component.
     if component != "project" && !store::is_valid_kebab_case(component) {
@@ -223,6 +275,14 @@ pub(crate) fn record_pattern(
     if decision_names.len() < 2 {
         return Err("a pattern must reference at least 2 decisions".into());
     }
+
+    // Validate field sizes.
+    validate_len(name, "name", MAX_NAME)?;
+    validate_len(description, "description", MAX_LONG_TEXT)?;
+    validate_array_len(&decision_names, "decisions", MAX_PATTERN_DECISIONS)?;
+    validate_array_len(&component_names, "components", MAX_ARRAY_ITEMS)?;
+    validate_array_len(&tags, "tags", MAX_ARRAY_ITEMS)?;
+    validate_item_lens(&tags, "tags", MAX_NAME)?;
 
     // Validate all referenced decisions exist.
     for dname in &decision_names {
@@ -471,6 +531,14 @@ fn amend_decision(
         return Err("amend requires at least one of `choice` or `reason`".into());
     }
 
+    // Validate field sizes.
+    if let Some(c) = new_choice {
+        validate_len(c, "choice", MAX_SHORT_TEXT)?;
+    }
+    if let Some(r) = new_reason {
+        validate_len(r, "reason", MAX_LONG_TEXT)?;
+    }
+
     let lock = store.lock().map_err(|e| e.to_string())?;
 
     let dec = state
@@ -537,6 +605,14 @@ fn supersede_decision(
 
     if opt_str(args, "choice").is_none() && opt_str(args, "reason").is_none() {
         return Err("supersede requires at least one of `choice` or `reason`".into());
+    }
+
+    // Validate field sizes.
+    if let Some(c) = opt_str(args, "choice") {
+        validate_len(c, "choice", MAX_SHORT_TEXT)?;
+    }
+    if let Some(r) = opt_str(args, "reason") {
+        validate_len(r, "reason", MAX_LONG_TEXT)?;
     }
 
     let component = old_dec.decision.component.clone();
@@ -1002,5 +1078,64 @@ mod tests {
         let args = json!({ "name": "ghost", "mode": "amend", "choice": "X" });
         let err = update_decision(&store, &mut state, &args).unwrap_err();
         assert!(err.contains("ghost"));
+    }
+
+    // ── input validation ────────────────────────────────────────────────
+
+    #[test]
+    fn record_decision_rejects_oversized_choice() {
+        let (_tmp, store, mut state) = setup();
+        let long = "x".repeat(MAX_SHORT_TEXT + 1);
+        let args = json!({ "component": "auth", "choice": long, "reason": "y" });
+        let err = record_decision(&store, &mut state, &args).unwrap_err();
+        assert!(err.contains("choice") && err.contains("maximum length"));
+    }
+
+    #[test]
+    fn record_decision_rejects_oversized_reason() {
+        let (_tmp, store, mut state) = setup();
+        let long = "x".repeat(MAX_LONG_TEXT + 1);
+        let args = json!({ "component": "auth", "choice": "y", "reason": long });
+        let err = record_decision(&store, &mut state, &args).unwrap_err();
+        assert!(err.contains("reason") && err.contains("maximum length"));
+    }
+
+    #[test]
+    fn record_decision_rejects_too_many_tags() {
+        let (_tmp, store, mut state) = setup();
+        let tags: Vec<String> = (0..MAX_ARRAY_ITEMS + 1).map(|i| format!("t{i}")).collect();
+        let args = json!({ "component": "auth", "choice": "x", "reason": "y", "tags": tags });
+        let err = record_decision(&store, &mut state, &args).unwrap_err();
+        assert!(err.contains("tags") && err.contains("too many"));
+    }
+
+    #[test]
+    fn record_pattern_rejects_oversized_description() {
+        let (_tmp, store, mut state) = setup();
+        let d1 = json!({ "component": "auth", "choice": "A", "reason": "r" });
+        let d2 = json!({ "component": "auth", "choice": "B", "reason": "r" });
+        record_decision(&store, &mut state, &d1).unwrap();
+        record_decision(&store, &mut state, &d2).unwrap();
+
+        let long = "x".repeat(MAX_LONG_TEXT + 1);
+        let args = json!({
+            "name": "test",
+            "description": long,
+            "decisions": ["a", "b"],
+        });
+        let err = record_pattern(&store, &mut state, &args).unwrap_err();
+        assert!(err.contains("description") && err.contains("maximum length"));
+    }
+
+    #[test]
+    fn amend_rejects_oversized_choice() {
+        let (_tmp, store, mut state) = setup();
+        let d = json!({ "component": "auth", "choice": "X", "reason": "Y" });
+        record_decision(&store, &mut state, &d).unwrap();
+
+        let long = "z".repeat(MAX_SHORT_TEXT + 1);
+        let args = json!({ "name": "x", "mode": "amend", "choice": long });
+        let err = update_decision(&store, &mut state, &args).unwrap_err();
+        assert!(err.contains("choice") && err.contains("maximum length"));
     }
 }
