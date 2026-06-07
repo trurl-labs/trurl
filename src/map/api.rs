@@ -24,6 +24,17 @@ use super::{MapState, ws};
 
 // ── Request bodies ─────────────────────────────────────────────────────────
 
+/// Maximum byte length for any single text field from the map API.
+/// Matches the MCP server's `MAX_TEXT_ARG_BYTES` bound — same store,
+/// same limits, regardless of entry point.
+const MAX_FIELD_BYTES: usize = 50_000;
+
+/// Maximum number of tags on a single decision.
+const MAX_TAGS: usize = 100;
+
+/// Maximum number of layout positions in a single PUT.
+const MAX_LAYOUT_POSITIONS: usize = 10_000;
+
 #[derive(Deserialize)]
 pub(crate) struct CreateComponent {
     name: String,
@@ -48,6 +59,18 @@ pub(crate) struct AmendDecision {
 pub(crate) struct PutLayout {
     positions: std::collections::BTreeMap<String, Position>,
     layout_version: u64,
+}
+
+// ── Input validation ──────────────────────────────────────────────────────
+
+fn check_field_len(field: &str, value: &str) -> Result<(), (StatusCode, Json<Value>)> {
+    if value.len() > MAX_FIELD_BYTES {
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            format!("`{field}` exceeds {MAX_FIELD_BYTES} byte limit"),
+        ));
+    }
+    Ok(())
 }
 
 // ── Error helper ───────────────────────────────────────────────────────────
@@ -151,6 +174,12 @@ pub(crate) async fn put_layout(
     State(state): State<Arc<MapState>>,
     Json(body): Json<PutLayout>,
 ) -> ApiResult {
+    if body.positions.len() > MAX_LAYOUT_POSITIONS {
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            format!("positions exceeds {MAX_LAYOUT_POSITIONS} entry limit"),
+        ));
+    }
     let mut layout = state.write_layout();
     if body.layout_version != layout.version {
         return Err(api_err(
@@ -204,6 +233,9 @@ pub(crate) async fn post_component(
 }
 
 fn write_component(state: Arc<MapState>, body: CreateComponent) -> ApiResult {
+    check_field_len("name", &body.name)?;
+    check_field_len("description", &body.description)?;
+
     if !store::is_valid_kebab_case(&body.name) {
         return Err(api_err(StatusCode::BAD_REQUEST, "invalid kebab-case name"));
     }
@@ -276,6 +308,9 @@ pub(crate) async fn post_connection(
 }
 
 fn write_connection(state: Arc<MapState>, body: CreateConnection) -> ApiResult {
+    check_field_len("from", &body.from)?;
+    check_field_len("to", &body.to)?;
+
     let mut ps = state.write_project_state();
 
     if !ps.components.contains_key(&body.from) {
@@ -345,6 +380,23 @@ fn amend_decision(state: Arc<MapState>, name: String, body: AmendDecision) -> Ap
             StatusCode::BAD_REQUEST,
             "at least one of choice, reason, or tags required",
         ));
+    }
+    if let Some(ref c) = body.choice {
+        check_field_len("choice", c)?;
+    }
+    if let Some(ref r) = body.reason {
+        check_field_len("reason", r)?;
+    }
+    if let Some(ref t) = body.tags {
+        if t.len() > MAX_TAGS {
+            return Err(api_err(
+                StatusCode::BAD_REQUEST,
+                format!("tags exceeds {MAX_TAGS} item limit"),
+            ));
+        }
+        for tag in t {
+            check_field_len("tags[]", tag)?;
+        }
     }
 
     let mut ps = state.write_project_state();

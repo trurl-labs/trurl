@@ -19,7 +19,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use axum::Router;
-use axum::http::header::{CONTENT_SECURITY_POLICY, HeaderValue};
+use axum::http::header::{
+    CONTENT_SECURITY_POLICY, HeaderValue, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+};
 use axum::middleware;
 use axum::routing::{delete, get, post, put};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
@@ -122,6 +124,18 @@ pub(crate) async fn start(
                      style-src 'self' 'unsafe-inline'; \
                      connect-src 'self' ws://127.0.0.1:*",
                 ),
+            ),
+        )
+        .layer(
+            tower_http::set_header::SetResponseHeaderLayer::if_not_present(
+                X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            ),
+        )
+        .layer(
+            tower_http::set_header::SetResponseHeaderLayer::if_not_present(
+                X_FRAME_OPTIONS,
+                HeaderValue::from_static("DENY"),
             ),
         );
 

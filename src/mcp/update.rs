@@ -19,77 +19,16 @@ pub(crate) fn remove_decision(
         return Err(format!("decision `{name}` does not exist"));
     }
 
-    // Cascade analysis: scope the graph borrow so we can mutate state afterward.
-    let (blocked_by, would_warn) = {
-        let graph = &state.graph;
-        let involved = graph.edges_involving(name);
+    // Cascade analysis via the shared graph method.
+    let cascade = state.graph.check_decision_cascade(name);
 
-        let mut blocked_by: Vec<Value> = Vec::new();
-        let mut would_warn: Vec<Value> = Vec::new();
-
-        // Block: other decisions depend on this one.
-        for (other, edge, dir) in &involved {
-            if edge.kind == EdgeKind::DependsOn && *dir == Direction::Reverse {
-                blocked_by.push(serde_json::json!({
-                    "node": other.to_string(),
-                    "edge": "depends_on",
-                    "message": format!("decision `{other}` depends on `{name}`"),
-                }));
-            }
-        }
-
-        // Block: pattern would shrink below 2 members.
-        for (other, edge, dir) in &involved {
-            if edge.kind == EdgeKind::MemberOf && *dir == Direction::Reverse {
-                let member_count = graph.forward_edge_count(other, EdgeKind::MemberOf);
-                if member_count <= 2 {
-                    blocked_by.push(serde_json::json!({
-                        "node": other.to_string(),
-                        "edge": "member_of",
-                        "message": format!(
-                            "pattern `{other}` would have fewer than 2 members"
-                        ),
-                    }));
-                } else {
-                    would_warn.push(serde_json::json!({
-                        "node": other.to_string(),
-                        "edge": "member_of",
-                        "message": format!("pattern `{other}` will be updated"),
-                    }));
-                }
-            }
-        }
-
-        // Warn: broken supersede chains.
-        for (other, edge, dir) in &involved {
-            if edge.kind == EdgeKind::Supersedes && *dir == Direction::Reverse {
-                would_warn.push(serde_json::json!({
-                    "node": other.to_string(),
-                    "edge": "supersedes",
-                    "message": format!("supersede chain broken for `{other}`"),
-                }));
-            }
-        }
-
-        // Warn: constrains edges pointing to this decision.
-        for (other, edge, dir) in &involved {
-            if edge.kind == EdgeKind::Constrains && *dir == Direction::Reverse {
-                would_warn.push(serde_json::json!({
-                    "node": other.to_string(),
-                    "edge": "constrains",
-                    "message": format!("constraint from `{other}` removed"),
-                }));
-            }
-        }
-
-        (blocked_by, would_warn)
-    }; // graph borrow released
-
-    if !blocked_by.is_empty() {
+    if cascade.is_blocked() {
         return Ok(serde_json::json!({
             "removed": false,
-            "blocked_by": blocked_by,
-            "would_warn": would_warn,
+            "blocked_by": cascade.blockers.iter()
+                .map(|b| serde_json::json!({ "message": b }))
+                .collect::<Vec<_>>(),
+            "warnings": cascade.warnings,
         }));
     }
 
@@ -120,7 +59,7 @@ pub(crate) fn remove_decision(
     Ok(serde_json::json!({
         "removed": true,
         "blocked_by": [],
-        "would_warn": would_warn,
+        "warnings": cascade.warnings,
     }))
 }
 
@@ -360,7 +299,11 @@ mod tests {
         let result = remove_decision(&store, &mut state, &args).unwrap();
         assert_eq!(result["removed"], false);
         let blocked = result["blocked_by"].as_array().unwrap();
-        assert!(blocked.iter().any(|b| b["edge"] == "member_of"));
+        assert!(blocked.iter().any(|b| {
+            b["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("fewer than 2"))
+        }));
     }
 
     #[test]
