@@ -1,12 +1,16 @@
 use crate::store;
-use crate::store::schema::EdgeKind;
 
 /// Build the system prompt from component context, existing decisions, and mode.
+///
+/// Uses [`InMemoryGraph`] for connection and pattern queries rather than
+/// scanning raw edge entries — consistent with the MCP context assembly
+/// path and O(1) per lookup after the one-time graph build.
 pub(crate) fn build_system_prompt(
     component: &str,
     state: &store::ProjectState,
     revisit: bool,
 ) -> String {
+    let graph = state.build_graph();
     let mut p = String::with_capacity(2048);
 
     p.push_str(
@@ -20,16 +24,21 @@ pub(crate) fn build_system_prompt(
         if !comp.component.description.is_empty() {
             p.push_str(&format!("Description: {}\n", comp.component.description));
         }
-        // Get connections from graph index.
-        let connects_to: Vec<&str> = state
-            .graph_index
-            .edges
+        let connects_to: Vec<String> = graph
+            .connects_to(component)
             .iter()
-            .filter(|e| e.from == component && e.kind == EdgeKind::ConnectsTo)
-            .map(|e| e.to.as_str())
+            .map(|a| a.to_string())
             .collect();
         if !connects_to.is_empty() {
             p.push_str(&format!("Connects to: {}\n", connects_to.join(", ")));
+        }
+        let connects_from: Vec<String> = graph
+            .connects_from(component)
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        if !connects_from.is_empty() {
+            p.push_str(&format!("Connects from: {}\n", connects_from.join(", ")));
         }
         p.push('\n');
     } else if component == "project" {
@@ -37,12 +46,7 @@ pub(crate) fn build_system_prompt(
     }
 
     // Existing decisions for this component
-    let comp_decisions: Vec<_> = state
-        .decisions
-        .iter()
-        .filter(|(_, d)| d.decision.component == component)
-        .collect();
-
+    let comp_decisions = graph.decisions_for(component);
     if !comp_decisions.is_empty() {
         p.push_str("## Existing decisions for this component\n");
         for (name, dec) in &comp_decisions {
@@ -54,14 +58,19 @@ pub(crate) fn build_system_prompt(
         p.push('\n');
     }
 
+    // Applicable patterns
+    let patterns = graph.patterns_for(component);
+    if !patterns.is_empty() {
+        p.push_str("## Applicable patterns\n");
+        for (name, pat) in &patterns {
+            p.push_str(&format!("- {}: {}\n", name, pat.pattern.description));
+        }
+        p.push('\n');
+    }
+
     // Project-wide decisions
     if component != "project" {
-        let project_decisions: Vec<_> = state
-            .decisions
-            .iter()
-            .filter(|(_, d)| d.decision.component == "project")
-            .collect();
-
+        let project_decisions = graph.project_decisions();
         if !project_decisions.is_empty() {
             p.push_str("## Project-wide decisions (apply everywhere)\n");
             for (name, dec) in &project_decisions {
@@ -122,6 +131,15 @@ mod tests {
                 },
             },
         );
+        components.insert(
+            "database".into(),
+            ComponentFile {
+                component: Component {
+                    name: "database".into(),
+                    description: "Database access layer".into(),
+                },
+            },
+        );
 
         let project = ProjectFile {
             trurl_version: "0.2.0".into(),
@@ -154,11 +172,18 @@ mod tests {
                     hash: String::new(),
                 },
             ],
-            edges: vec![EdgeEntry {
-                from: "auth".into(),
-                to: "database".into(),
-                kind: EdgeKind::ConnectsTo,
-            }],
+            edges: vec![
+                EdgeEntry {
+                    from: "auth".into(),
+                    to: "database".into(),
+                    kind: EdgeKind::ConnectsTo,
+                },
+                EdgeEntry {
+                    from: "database".into(),
+                    to: "auth".into(),
+                    kind: EdgeKind::ConnectsTo,
+                },
+            ],
         };
 
         store::ProjectState {
@@ -175,8 +200,21 @@ mod tests {
         let state = test_state();
         let prompt = build_system_prompt("auth", &state, false);
         assert!(prompt.contains("auth"));
-        assert!(prompt.contains("database"));
         assert!(prompt.contains("Authentication service"));
+    }
+
+    #[test]
+    fn includes_forward_connections() {
+        let state = test_state();
+        let prompt = build_system_prompt("auth", &state, false);
+        assert!(prompt.contains("Connects to: database"));
+    }
+
+    #[test]
+    fn includes_reverse_connections() {
+        let state = test_state();
+        let prompt = build_system_prompt("auth", &state, false);
+        assert!(prompt.contains("Connects from: database"));
     }
 
     #[test]
@@ -201,5 +239,103 @@ mod tests {
         let state = test_state();
         let prompt = build_system_prompt("project", &state, false);
         assert!(prompt.contains("test-project"));
+    }
+
+    #[test]
+    fn includes_applicable_patterns() {
+        let mut state = test_state();
+
+        state.patterns.insert(
+            "stateless-auth".into(),
+            PatternFile {
+                pattern: Pattern {
+                    name: "stateless-auth".into(),
+                    description: "All auth is stateless via JWT".into(),
+                },
+            },
+        );
+        state.graph_index.nodes.push(NodeEntry {
+            name: "stateless-auth".into(),
+            kind: NodeKind::Pattern,
+            tags: vec![],
+            hash: String::new(),
+        });
+        state.graph_index.edges.push(EdgeEntry {
+            from: "stateless-auth".into(),
+            to: "auth".into(),
+            kind: EdgeKind::AppliesTo,
+        });
+
+        let prompt = build_system_prompt("auth", &state, false);
+        assert!(prompt.contains("## Applicable patterns"));
+        assert!(prompt.contains("stateless-auth"));
+        assert!(prompt.contains("All auth is stateless via JWT"));
+    }
+
+    #[test]
+    fn includes_existing_decisions() {
+        let mut state = test_state();
+        let ts = Utc.with_ymd_and_hms(2025, 6, 1, 10, 0, 0).unwrap();
+        state.decisions.insert(
+            "use-jwt".into(),
+            DecisionFile {
+                decision: Decision {
+                    component: "auth".into(),
+                    choice: "JWT with DPoP".into(),
+                    reason: "Stateless".into(),
+                    alternatives: vec![],
+                    created: ts,
+                },
+            },
+        );
+        state.graph_index.nodes.push(NodeEntry {
+            name: "use-jwt".into(),
+            kind: NodeKind::Decision,
+            tags: vec![],
+            hash: String::new(),
+        });
+        state.graph_index.edges.push(EdgeEntry {
+            from: "use-jwt".into(),
+            to: "auth".into(),
+            kind: EdgeKind::BelongsTo,
+        });
+
+        let prompt = build_system_prompt("auth", &state, false);
+        assert!(prompt.contains("## Existing decisions"));
+        assert!(prompt.contains("JWT with DPoP"));
+        assert!(prompt.contains("Stateless"));
+    }
+
+    #[test]
+    fn includes_project_wide_decisions() {
+        let mut state = test_state();
+        let ts = Utc.with_ymd_and_hms(2025, 6, 1, 10, 0, 0).unwrap();
+        state.decisions.insert(
+            "error-strategy".into(),
+            DecisionFile {
+                decision: Decision {
+                    component: "project".into(),
+                    choice: "Result<T, AppError>".into(),
+                    reason: "Consistent errors".into(),
+                    alternatives: vec![],
+                    created: ts,
+                },
+            },
+        );
+        state.graph_index.nodes.push(NodeEntry {
+            name: "error-strategy".into(),
+            kind: NodeKind::Decision,
+            tags: vec![],
+            hash: String::new(),
+        });
+        state.graph_index.edges.push(EdgeEntry {
+            from: "error-strategy".into(),
+            to: "project".into(),
+            kind: EdgeKind::BelongsTo,
+        });
+
+        let prompt = build_system_prompt("auth", &state, false);
+        assert!(prompt.contains("## Project-wide decisions"));
+        assert!(prompt.contains("Result<T, AppError>"));
     }
 }
