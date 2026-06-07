@@ -9,18 +9,20 @@ pub fn serve(cwd: &Path) -> Result<()> {
     let state = store.load_state()?;
 
     let issues = state.validate();
-    if !issues.is_empty() {
-        eprintln!(
-            "warning: .trurl/ has {} consistency issue(s) — run `trurl check`",
-            issues.len()
-        );
+    let error_count = issues
+        .iter()
+        .filter(|i| i.severity == crate::store::graph::Severity::Error)
+        .count();
+    if error_count > 0 {
+        eprintln!("warning: .trurl/ has {error_count} consistency issue(s) — run `trurl check`");
     }
 
     eprintln!(
-        "trurl: serving {} ({} components, {} decisions)",
+        "trurl: serving {} ({} components, {} decisions, {} patterns)",
         state.project.project.name,
         state.components.len(),
         state.decisions.len(),
+        state.patterns.len(),
     );
 
     crate::mcp::run_server(store.root())

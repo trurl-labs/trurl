@@ -62,16 +62,11 @@ pub(crate) fn tool_list() -> Value {
 
 // ── Tool dispatch ───────────────────────────────────────────────────────────
 
-pub(crate) fn call_tool(store: &crate::store::Store, name: &str, args: &Value) -> Value {
-    let state = match store.load_state() {
-        Ok(s) => s,
-        Err(e) => return tool_error(&format!("failed to load .trurl/ state: {e}")),
-    };
-
+pub(crate) fn call_tool(state: &crate::store::ProjectState, name: &str, args: &Value) -> Value {
     match name {
-        "get_context" => dispatch_get_context(&state, args),
-        "check_pattern" => dispatch_check_pattern(&state, args),
-        "get_architecture" => tool_result(&context::get_architecture(&state)),
+        "get_context" => dispatch_get_context(state, args),
+        "check_pattern" => dispatch_check_pattern(state, args),
+        "get_architecture" => tool_result(&context::get_architecture(state)),
         _ => tool_error(&format!("unknown tool: {name}")),
     }
 }

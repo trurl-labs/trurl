@@ -38,10 +38,13 @@ pub async fn run_design(
     let mut state = store.load_state()?;
 
     let issues = state.validate();
-    if !issues.is_empty() {
+    let error_count = issues
+        .iter()
+        .filter(|i| i.severity == crate::store::graph::Severity::Error)
+        .count();
+    if error_count > 0 {
         eprintln!(
-            "warning: .trurl/ has {} consistency issue(s) — run `trurl check` for details",
-            issues.len()
+            "warning: .trurl/ has {error_count} consistency issue(s) — run `trurl check` for details"
         );
     }
 
