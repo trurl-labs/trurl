@@ -176,10 +176,11 @@ fn node_changes(old: &NodeEntry, new: &NodeEntry, state: &ProjectState) -> Value
 
     // For decisions, include the updated choice/reason if available.
     if new.kind == NodeKind::Decision
-        && let Some(dec) = state.decisions.get(&new.name) {
-            changes.insert("choice".into(), Value::String(dec.decision.choice.clone()));
-            changes.insert("reason".into(), Value::String(dec.decision.reason.clone()));
-        }
+        && let Some(dec) = state.decisions.get(&new.name)
+    {
+        changes.insert("choice".into(), Value::String(dec.decision.choice.clone()));
+        changes.insert("reason".into(), Value::String(dec.decision.reason.clone()));
+    }
 
     Value::Object(changes)
 }

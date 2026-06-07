@@ -7,6 +7,7 @@
 
 pub(crate) mod api;
 pub(crate) mod diff;
+pub(crate) mod embed;
 pub(crate) mod layout;
 pub(crate) mod token;
 pub(crate) mod ws;
@@ -110,6 +111,7 @@ pub(crate) async fn start(
     let app = Router::new()
         .nest("/api", api_routes)
         .route("/ws", get(ws::handler))
+        .fallback(embed::static_handler)
         .with_state(map_state.clone())
         .layer(
             tower_http::set_header::SetResponseHeaderLayer::if_not_present(
