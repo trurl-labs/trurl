@@ -1,9 +1,7 @@
-use chrono::Utc;
 use serde_json::Value;
 
 use crate::Result;
-use crate::store::schema::{Decision, DecisionFile, EdgeEntry, EdgeKind, NodeEntry, NodeKind};
-use crate::store::{self, Store, slugify, unique_decision_stem};
+use crate::store::{self, RecordDecisionParams, Store};
 
 // ── Extraction ──────────────────────────────────────────────────────────────
 
@@ -133,11 +131,8 @@ pub(crate) fn is_design_complete(response: &str) -> bool {
 // ── Recording ───────────────────────────────────────────────────────────────
 
 /// Write a single decision to the store, with full validation.
-/// Acquires the store lock **before** deriving the filename stem and
-/// validating, closing the TOCTOU window between validation and write.
-/// Uses the caller's cached [`ProjectState`] — no re-load from disk.
-/// On success, `state` is updated in-place so subsequent calls see
-/// the new decision. On failure, `state` is rolled back.
+/// Acquires the store lock, delegates to [`Store::record_decision`],
+/// and returns the filename stem on success.
 pub(crate) fn record_decision(
     store: &Store,
     state: &mut store::ProjectState,
@@ -146,56 +141,21 @@ pub(crate) fn record_decision(
     reason: &str,
     alternatives: &[String],
 ) -> Result<String> {
-    // Acquire lock FIRST — prevents concurrent writes between stem
-    // derivation / validation and the actual disk write.
     let lock = store.lock()?;
-
-    let stem = unique_decision_stem(&state.decisions, &slugify(choice))?;
-
-    let decision = DecisionFile {
-        decision: Decision {
-            component: component.into(),
-            choice: choice.into(),
-            reason: reason.into(),
-            alternatives: alternatives.to_vec(),
-            created: Utc::now(),
+    store.record_decision(
+        &lock,
+        state,
+        RecordDecisionParams {
+            component,
+            choice,
+            reason,
+            alternatives,
+            supersedes: None,
+            depends_on: &[],
+            constrains: &[],
+            tags: &[],
         },
-    };
-
-    let write = store.prepare_write(&store.decision_path(&stem), &decision)?;
-    let hash = write.content_hash();
-
-    // Snapshot graph index for rollback.
-    let graph_snapshot = state.graph_index.clone();
-
-    // Add node and BelongsTo edge to graph index.
-    state.graph_index.nodes.push(NodeEntry {
-        name: stem.clone(),
-        kind: NodeKind::Decision,
-        tags: vec![],
-        hash,
-    });
-    state.graph_index.edges.push(EdgeEntry {
-        from: stem.clone(),
-        to: component.into(),
-        kind: EdgeKind::BelongsTo,
-    });
-
-    // Insert into in-memory state for validation.
-    state.decisions.insert(stem.clone(), decision);
-
-    if let Err(e) = store.commit_with_graph(&lock, vec![write], vec![], state) {
-        state.decisions.remove(&stem);
-        state.graph_index = graph_snapshot;
-        return Err(e);
-    }
-
-    // Refresh the cached InMemoryGraph so subsequent calls within the
-    // same session see the decision we just committed. Without this,
-    // multi-decision design sessions validate against a stale graph.
-    state.rebuild_graph();
-
-    Ok(stem)
+    )
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -203,6 +163,7 @@ pub(crate) fn record_decision(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::schema::EdgeKind;
 
     // ── extract_decisions ────────────────────────────────────────────────
 

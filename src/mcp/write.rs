@@ -1,13 +1,10 @@
 use std::collections::HashSet;
 
-use chrono::Utc;
 use serde_json::Value;
 
 use crate::store::graph::{Direction, Severity};
-use crate::store::schema::{
-    Decision, DecisionFile, EdgeEntry, EdgeKind, NodeEntry, NodeKind, Pattern, PatternFile,
-};
-use crate::store::{self, Store, slugify, unique_decision_stem};
+use crate::store::schema::{EdgeEntry, EdgeKind, NodeEntry, NodeKind, Pattern, PatternFile};
+use crate::store::{self, Store, slugify};
 
 // ── Argument helpers ────────────────────────────────────────────────────────
 
@@ -168,79 +165,23 @@ pub(crate) fn record_decision(
     }
 
     let lock = store.lock().map_err(|e| e.to_string())?;
-    let stem =
-        unique_decision_stem(&state.decisions, &slugify(choice)).map_err(|e| e.to_string())?;
 
-    let decision = DecisionFile {
-        decision: Decision {
-            component: component.into(),
-            choice: choice.into(),
-            reason: reason.into(),
-            alternatives,
-            created: Utc::now(),
-        },
-    };
-
-    let write = store
-        .prepare_write(&store.decision_path(&stem), &decision)
+    let stem = store
+        .record_decision(
+            &lock,
+            state,
+            store::RecordDecisionParams {
+                component,
+                choice,
+                reason,
+                alternatives: &alternatives,
+                supersedes,
+                depends_on: &depends_on,
+                constrains: &constrains,
+                tags: &tags,
+            },
+        )
         .map_err(|e| e.to_string())?;
-    let hash = write.content_hash();
-
-    // Snapshot for rollback.
-    let graph_snapshot = state.graph_index.clone();
-
-    // Add node.
-    state.graph_index.nodes.push(NodeEntry {
-        name: stem.clone(),
-        kind: NodeKind::Decision,
-        tags,
-        hash,
-    });
-
-    // BelongsTo edge.
-    state.graph_index.edges.push(EdgeEntry {
-        from: stem.clone(),
-        to: component.into(),
-        kind: EdgeKind::BelongsTo,
-    });
-
-    // DependsOn edges.
-    for dep in &depends_on {
-        state.graph_index.edges.push(EdgeEntry {
-            from: stem.clone(),
-            to: dep.clone(),
-            kind: EdgeKind::DependsOn,
-        });
-    }
-
-    // Constrains edges.
-    for con in &constrains {
-        state.graph_index.edges.push(EdgeEntry {
-            from: stem.clone(),
-            to: con.clone(),
-            kind: EdgeKind::Constrains,
-        });
-    }
-
-    // Supersedes edge.
-    if let Some(sup) = supersedes {
-        state.graph_index.edges.push(EdgeEntry {
-            from: stem.clone(),
-            to: sup.into(),
-            kind: EdgeKind::Supersedes,
-        });
-    }
-
-    state.decisions.insert(stem.clone(), decision);
-
-    // commit_with_graph validates the full graph (including cycle detection).
-    if let Err(e) = store.commit_with_graph(&lock, vec![write], vec![], state) {
-        state.decisions.remove(&stem);
-        state.graph_index = graph_snapshot;
-        return Err(e.to_string());
-    }
-
-    state.rebuild_graph();
 
     // Collect warnings for the caller.
     let mut warnings: Vec<String> = Vec::new();

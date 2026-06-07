@@ -1,10 +1,8 @@
 use std::path::Path;
 
-use chrono::Utc;
-
 use crate::store::graph::Direction;
-use crate::store::schema::{Decision, DecisionFile, EdgeEntry, EdgeKind, NodeEntry, NodeKind};
-use crate::store::{self, slugify, unique_decision_stem};
+use crate::store::schema::EdgeKind;
+use crate::store::{self, RecordDecisionParams};
 use crate::{Error, Result};
 
 use super::open_store_mut;
@@ -37,48 +35,21 @@ pub fn decide(
         )));
     }
 
-    let stem = unique_decision_stem(&state.decisions, &slugify(choice))?;
-
-    let decision = DecisionFile {
-        decision: Decision {
-            component: component.into(),
-            choice: choice.into(),
-            reason: reason.into(),
-            alternatives: alternatives.to_vec(),
-            created: Utc::now(),
+    let stem = store.record_decision(
+        &lock,
+        &mut state,
+        RecordDecisionParams {
+            component,
+            choice,
+            reason,
+            alternatives,
+            supersedes,
+            depends_on: &[],
+            constrains: &[],
+            tags: &[],
         },
-    };
+    )?;
 
-    let write = store.prepare_write(&store.decision_path(&stem), &decision)?;
-    let hash = write.content_hash();
-
-    // Add node to graph index.
-    state.graph_index.nodes.push(NodeEntry {
-        name: stem.clone(),
-        kind: NodeKind::Decision,
-        tags: vec![],
-        hash,
-    });
-
-    // Add BelongsTo edge.
-    state.graph_index.edges.push(EdgeEntry {
-        from: stem.clone(),
-        to: component.into(),
-        kind: EdgeKind::BelongsTo,
-    });
-
-    // Add Supersedes edge if applicable.
-    if let Some(sup) = supersedes {
-        state.graph_index.edges.push(EdgeEntry {
-            from: stem.clone(),
-            to: sup.into(),
-            kind: EdgeKind::Supersedes,
-        });
-    }
-
-    state.decisions.insert(stem.clone(), decision);
-
-    store.commit_with_graph(&lock, vec![write], vec![], &state)?;
     println!("Recorded decision `{stem}`");
     Ok(())
 }
@@ -173,6 +144,7 @@ mod tests {
     use crate::commands::{add_component, init};
     use crate::store::Store;
     use crate::store::schema::EdgeKind;
+    use chrono::Utc;
     use tempfile::TempDir;
 
     #[test]

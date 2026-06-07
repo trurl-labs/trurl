@@ -2,14 +2,15 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+use chrono::Utc;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::{Error, Result};
 
 use super::graph::Severity;
-use super::schema::GraphIndex;
-use super::state::ProjectState;
+use super::schema::{Decision, DecisionFile, EdgeEntry, EdgeKind, GraphIndex, NodeEntry, NodeKind};
+use super::state::{ProjectState, slugify, unique_decision_stem};
 use super::{Store, StoreLock};
 
 // ── PendingWrite ─────────────────────────────────────────────────────────────
@@ -30,7 +31,26 @@ impl PendingWrite {
     }
 }
 
-// ── Store write methods ─────────────────────────────────────────────────────
+// ── Store write methods ─────────────────────────────────────────────────
+
+// ── RecordDecisionParams ────────────────────────────────────────────────
+
+/// Parameters for [`Store::record_decision`].
+///
+/// Callers are responsible for validating that `component` exists (or is
+/// `"project"`), that all `depends_on`/`constrains`/`supersedes` targets
+/// exist, and that names are valid kebab-case. The shared write path does
+/// not re-validate — it trusts the caller and focuses on atomic mutation.
+pub struct RecordDecisionParams<'a> {
+    pub component: &'a str,
+    pub choice: &'a str,
+    pub reason: &'a str,
+    pub alternatives: &'a [String],
+    pub supersedes: Option<&'a str>,
+    pub depends_on: &'a [String],
+    pub constrains: &'a [String],
+    pub tags: &'a [String],
+}
 
 impl Store {
     /// Write `value` to `target` atomically via `.state/tmp/`.
@@ -286,6 +306,95 @@ impl Store {
     pub fn remove_file(&self, _lock: &StoreLock, target: &Path) -> Result<()> {
         self.verify_path(target)?;
         Ok(fs::remove_file(target)?)
+    }
+
+    // ── Record decision (shared write path) ────────────────────────────
+
+    /// Record a new decision to disk with full graph validation and rollback.
+    ///
+    /// Single write path for CLI `decide`, MCP `record_decision`, and design
+    /// conversation extraction. Derives a unique filename stem from
+    /// `params.choice`, builds the `DecisionFile`, adds the node and all
+    /// requested edges to the graph index, and commits atomically.
+    ///
+    /// On success, `state` is updated in-place (including graph cache
+    /// rebuild) and the decision stem is returned. On failure, `state` is
+    /// rolled back to its pre-call condition.
+    ///
+    /// **Callers must** validate inputs before calling: component existence,
+    /// edge target existence, name format. This function trusts those
+    /// invariants and focuses on atomic mutation + graph integrity.
+    pub fn record_decision(
+        &self,
+        lock: &StoreLock,
+        state: &mut ProjectState,
+        params: RecordDecisionParams<'_>,
+    ) -> Result<String> {
+        let stem = unique_decision_stem(&state.decisions, &slugify(params.choice))?;
+
+        let decision = DecisionFile {
+            decision: Decision {
+                component: params.component.into(),
+                choice: params.choice.into(),
+                reason: params.reason.into(),
+                alternatives: params.alternatives.to_vec(),
+                created: Utc::now(),
+            },
+        };
+
+        let write = self.prepare_write(&self.decision_path(&stem), &decision)?;
+        let hash = write.content_hash();
+
+        // Snapshot for rollback on commit failure.
+        let graph_snapshot = state.graph_index.clone();
+
+        state.graph_index.nodes.push(NodeEntry {
+            name: stem.clone(),
+            kind: NodeKind::Decision,
+            tags: params.tags.to_vec(),
+            hash,
+        });
+
+        state.graph_index.edges.push(EdgeEntry {
+            from: stem.clone(),
+            to: params.component.into(),
+            kind: EdgeKind::BelongsTo,
+        });
+
+        for dep in params.depends_on {
+            state.graph_index.edges.push(EdgeEntry {
+                from: stem.clone(),
+                to: dep.clone(),
+                kind: EdgeKind::DependsOn,
+            });
+        }
+
+        for con in params.constrains {
+            state.graph_index.edges.push(EdgeEntry {
+                from: stem.clone(),
+                to: con.clone(),
+                kind: EdgeKind::Constrains,
+            });
+        }
+
+        if let Some(sup) = params.supersedes {
+            state.graph_index.edges.push(EdgeEntry {
+                from: stem.clone(),
+                to: sup.into(),
+                kind: EdgeKind::Supersedes,
+            });
+        }
+
+        state.decisions.insert(stem.clone(), decision);
+
+        if let Err(e) = self.commit_with_graph(lock, vec![write], vec![], state) {
+            state.decisions.remove(&stem);
+            state.graph_index = graph_snapshot;
+            return Err(e);
+        }
+
+        state.rebuild_graph();
+        Ok(stem)
     }
 
     // ── Crash recovery ───────────────────────────────────────────────────
