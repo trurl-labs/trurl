@@ -60,10 +60,10 @@ pub(crate) async fn stream_sse(
             });
         }
 
-        for text in drain_sse_text(&mut buffer, extract) {
+        drain_sse_text(&mut buffer, extract, |text| {
             on_text(&text);
             full.push_str(&text);
-        }
+        });
 
         if full.len() > MAX_RESPONSE_BYTES {
             return Err(Error::Api {
@@ -73,17 +73,27 @@ pub(crate) async fn stream_sse(
         }
     }
 
-    // Flush any remaining complete lines
-    for text in drain_sse_text(&mut buffer, extract) {
+    // Flush any remaining complete lines.
+    drain_sse_text(&mut buffer, extract, |text| {
         on_text(&text);
         full.push_str(&text);
-    }
+    });
 
     Ok(full)
 }
 
-fn drain_sse_text(buffer: &mut String, extract: fn(&str) -> Option<String>) -> Vec<String> {
-    let mut chunks = Vec::new();
+/// Parse complete SSE lines from `buffer`, pass extracted text directly to
+/// `sink`, and drain consumed bytes. Incomplete trailing lines are preserved
+/// in the buffer for the next call.
+///
+/// Uses a callback instead of returning `Vec<String>` — the intermediate
+/// collection is unnecessary since each text chunk is immediately forwarded
+/// to `on_text` and appended to the accumulator.
+fn drain_sse_text(
+    buffer: &mut String,
+    extract: fn(&str) -> Option<String>,
+    mut sink: impl FnMut(String),
+) {
     let mut consumed = 0;
 
     while let Some(pos) = buffer[consumed..].find('\n') {
@@ -99,7 +109,7 @@ fn drain_sse_text(buffer: &mut String, extract: fn(&str) -> Option<String>) -> V
                 continue;
             }
             if let Some(text) = extract(data) {
-                chunks.push(text);
+                sink(text);
             }
         }
     }
@@ -107,7 +117,6 @@ fn drain_sse_text(buffer: &mut String, extract: fn(&str) -> Option<String>) -> V
     if consumed > 0 {
         buffer.drain(..consumed);
     }
-    chunks
 }
 
 // ── Provider-specific text extractors ────────────────────────────────────────
@@ -284,10 +293,17 @@ mod tests {
         json.get("t")?.as_str().map(String::from)
     }
 
+    /// Collect drain_sse_text output into a Vec for test assertions.
+    fn drain_collect(buf: &mut String, extract: fn(&str) -> Option<String>) -> Vec<String> {
+        let mut out = Vec::new();
+        drain_sse_text(buf, extract, |t| out.push(t));
+        out
+    }
+
     #[test]
     fn drain_processes_complete_lines() {
         let mut buf = "data: {\"t\":\"a\"}\ndata: {\"t\":\"b\"}\n".to_string();
-        let chunks = drain_sse_text(&mut buf, extract_test_text);
+        let chunks = drain_collect(&mut buf, extract_test_text);
         assert_eq!(chunks, vec!["a", "b"]);
         assert!(buf.is_empty());
     }
@@ -295,7 +311,7 @@ mod tests {
     #[test]
     fn drain_preserves_incomplete_line() {
         let mut buf = "data: {\"t\":\"a\"}\ndata: incompl".to_string();
-        let chunks = drain_sse_text(&mut buf, extract_test_text);
+        let chunks = drain_collect(&mut buf, extract_test_text);
         assert_eq!(chunks, vec!["a"]);
         assert_eq!(buf, "data: incompl");
     }
@@ -303,49 +319,49 @@ mod tests {
     #[test]
     fn drain_skips_done_marker() {
         let mut buf = "data: {\"t\":\"x\"}\ndata: [DONE]\n".to_string();
-        let chunks = drain_sse_text(&mut buf, extract_test_text);
+        let chunks = drain_collect(&mut buf, extract_test_text);
         assert_eq!(chunks, vec!["x"]);
     }
 
     #[test]
     fn drain_skips_sse_comments() {
         let mut buf = ": keep-alive\ndata: {\"t\":\"y\"}\n".to_string();
-        let chunks = drain_sse_text(&mut buf, extract_test_text);
+        let chunks = drain_collect(&mut buf, extract_test_text);
         assert_eq!(chunks, vec!["y"]);
     }
 
     #[test]
     fn drain_skips_empty_lines() {
         let mut buf = "\ndata: {\"t\":\"z\"}\n\n".to_string();
-        let chunks = drain_sse_text(&mut buf, extract_test_text);
+        let chunks = drain_collect(&mut buf, extract_test_text);
         assert_eq!(chunks, vec!["z"]);
     }
 
     #[test]
     fn drain_handles_crlf() {
         let mut buf = "data: {\"t\":\"cr\"}\r\n".to_string();
-        let chunks = drain_sse_text(&mut buf, extract_test_text);
+        let chunks = drain_collect(&mut buf, extract_test_text);
         assert_eq!(chunks, vec!["cr"]);
     }
 
     #[test]
     fn drain_skips_unparseable_data() {
         let mut buf = "data: not-json\ndata: {\"t\":\"ok\"}\n".to_string();
-        let chunks = drain_sse_text(&mut buf, extract_test_text);
+        let chunks = drain_collect(&mut buf, extract_test_text);
         assert_eq!(chunks, vec!["ok"]);
     }
 
     #[test]
     fn drain_ignores_non_data_fields() {
         let mut buf = "event: delta\ndata: {\"t\":\"v\"}\n\n".to_string();
-        let chunks = drain_sse_text(&mut buf, extract_test_text);
+        let chunks = drain_collect(&mut buf, extract_test_text);
         assert_eq!(chunks, vec!["v"]);
     }
 
     #[test]
     fn drain_empty_buffer_is_noop() {
         let mut buf = String::new();
-        let chunks = drain_sse_text(&mut buf, extract_test_text);
+        let chunks = drain_collect(&mut buf, extract_test_text);
         assert!(chunks.is_empty());
     }
 }

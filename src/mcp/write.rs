@@ -3,12 +3,11 @@ use std::collections::HashSet;
 use chrono::Utc;
 use serde_json::Value;
 
-use crate::commands::{slugify, unique_decision_stem};
 use crate::store::graph::{Direction, Severity};
 use crate::store::schema::{
     Decision, DecisionFile, EdgeEntry, EdgeKind, NodeEntry, NodeKind, Pattern, PatternFile,
 };
-use crate::store::{self, Store};
+use crate::store::{self, Store, slugify, unique_decision_stem};
 
 // ── Argument helpers ────────────────────────────────────────────────────────
 

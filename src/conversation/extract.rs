@@ -2,9 +2,8 @@ use chrono::Utc;
 use serde_json::Value;
 
 use crate::Result;
-use crate::commands;
 use crate::store::schema::{Decision, DecisionFile, EdgeEntry, EdgeKind, NodeEntry, NodeKind};
-use crate::store::{self, Store};
+use crate::store::{self, Store, slugify, unique_decision_stem};
 
 // ── Extraction ──────────────────────────────────────────────────────────────
 
@@ -79,7 +78,7 @@ pub(crate) fn record_decision(
     // derivation / validation and the actual disk write.
     let lock = store.lock()?;
 
-    let stem = commands::unique_decision_stem(&state.decisions, &commands::slugify(choice))?;
+    let stem = unique_decision_stem(&state.decisions, &slugify(choice))?;
 
     let decision = DecisionFile {
         decision: Decision {

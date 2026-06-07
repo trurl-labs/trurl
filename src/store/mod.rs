@@ -26,7 +26,9 @@ pub use schema::{
     COMPONENTS_DIR, ComponentFile, DECISIONS_DIR, DecisionFile, FORMAT_VERSION, GRAPH_FILE,
     PATTERNS_DIR, PatternFile, ProjectFile, STATE_DIR, STORE_DIR,
 };
-pub use state::{ProjectState, is_reserved_node_name, is_valid_kebab_case};
+pub use state::{
+    ProjectState, is_reserved_node_name, is_valid_kebab_case, slugify, unique_decision_stem,
+};
 
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 

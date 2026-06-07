@@ -4,10 +4,10 @@ use chrono::Utc;
 
 use crate::store::graph::Direction;
 use crate::store::schema::{Decision, DecisionFile, EdgeEntry, EdgeKind, NodeEntry, NodeKind};
-use crate::store::{self};
+use crate::store::{self, slugify, unique_decision_stem};
 use crate::{Error, Result};
 
-use super::{open_store_mut, slugify, unique_decision_stem};
+use super::open_store_mut;
 
 pub fn decide(
     cwd: &Path,

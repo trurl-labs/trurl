@@ -172,6 +172,7 @@ impl InMemoryGraph {
     }
 
     /// Transitive dependencies via `DependsOn` edges. BFS, max depth 3.
+    #[allow(dead_code)] // planned for Phase 6 (MCP design-prompt enrichment)
     pub fn transitive_deps(&self, decision: &str) -> Vec<&Arc<str>> {
         let mut result = Vec::new();
         let mut visited: HashSet<&str> = HashSet::new();
@@ -249,6 +250,7 @@ impl InMemoryGraph {
     ///
     /// Returns `true` if `from` is reachable from `to` via existing
     /// `DependsOn` edges (meaning the new edge would close a loop).
+    #[allow(dead_code)] // planned for Phase 7 (interactive cycle prevention)
     pub fn would_cycle(&self, from: &str, to: &str) -> bool {
         if from == to {
             return true;
@@ -286,6 +288,7 @@ impl InMemoryGraph {
         self.decisions.get(name)
     }
 
+    #[allow(dead_code)] // planned for Phase 6 (MCP pattern-aware context)
     pub fn pattern(&self, name: &str) -> Option<&PatternFile> {
         self.patterns.get(name)
     }

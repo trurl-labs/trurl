@@ -96,7 +96,7 @@ impl ProjectState {
     }
 }
 
-// ── Validation helpers ───────────────────────────────────────────────────────
+// ── Name validation ─────────────────────────────────────────────────────────
 
 /// Check whether a name is valid kebab-case.
 /// Rules: non-empty, lowercase ASCII letters + digits + hyphens only,
@@ -117,6 +117,84 @@ pub fn is_valid_kebab_case(name: &str) -> bool {
 pub fn is_reserved_node_name(name: &str) -> bool {
     name == "project"
 }
+
+// ── Slugify ─────────────────────────────────────────────────────────────────
+
+const MAX_SLUG_LEN: usize = 60;
+
+/// Convert a free-text string to a kebab-case slug suitable for
+/// filenames and node names.
+///
+/// Lowercases ASCII letters, keeps digits, replaces everything else
+/// with hyphens. Collapses runs, strips leading/trailing hyphens,
+/// truncates at a word boundary, and falls back to `"decision"` for
+/// empty input.
+pub fn slugify(input: &str) -> String {
+    let mut slug = String::with_capacity(input.len());
+    let mut prev_hyphen = true;
+
+    for c in input.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+            prev_hyphen = false;
+        } else if !prev_hyphen {
+            slug.push('-');
+            prev_hyphen = true;
+        }
+    }
+
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+
+    if slug.len() > MAX_SLUG_LEN {
+        slug.truncate(MAX_SLUG_LEN);
+        if let Some(last_hyphen) = slug.rfind('-') {
+            slug.truncate(last_hyphen);
+        }
+        while slug.ends_with('-') {
+            slug.pop();
+        }
+    }
+
+    if slug.is_empty() {
+        slug.push_str("decision");
+    }
+
+    slug
+}
+
+// ── Unique decision stem ────────────────────────────────────────────────────
+
+const MAX_DEDUP_SUFFIX: u32 = 10_000;
+
+/// Derive a unique decision filename stem from `base`, appending `-2`,
+/// `-3`, … if `base` already exists in `decisions`. Reserved names
+/// (e.g. `"project"`) are disambiguated with a `-decision` suffix.
+pub fn unique_decision_stem(
+    decisions: &BTreeMap<String, DecisionFile>,
+    base: &str,
+) -> Result<String> {
+    if is_reserved_node_name(base) {
+        // Disambiguate immediately — "project" is the virtual node.
+        let candidate = format!("{base}-decision");
+        return unique_decision_stem(decisions, &candidate);
+    }
+    if !decisions.contains_key(base) {
+        return Ok(base.to_string());
+    }
+    for n in 2..=MAX_DEDUP_SUFFIX {
+        let candidate = format!("{base}-{n}");
+        if !decisions.contains_key(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err(Error::Validation(format!(
+        "too many decisions with stem `{base}` (limit: {MAX_DEDUP_SUFFIX})"
+    )))
+}
+
+// ── Directory listing ───────────────────────────────────────────────────────
 
 pub(super) fn list_toml_stems(dir: &Path) -> Result<Vec<String>> {
     let entries = match fs::read_dir(dir) {
@@ -180,6 +258,88 @@ mod tests {
         assert!(!is_reserved_node_name("my-project"));
         assert!(!is_reserved_node_name("auth"));
         assert!(!is_reserved_node_name(""));
+    }
+
+    // ── slugify ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn slugify_basic() {
+        assert_eq!(slugify("Use Redis"), "use-redis");
+        assert_eq!(slugify("JWT with DPoP binding"), "jwt-with-dpop-binding");
+    }
+
+    #[test]
+    fn slugify_special_chars() {
+        assert_eq!(slugify("Result<T, AppError>"), "result-t-apperror");
+        assert_eq!(
+            slugify("429 + retry-after header"),
+            "429-retry-after-header"
+        );
+    }
+
+    #[test]
+    fn slugify_collapses_runs() {
+        assert_eq!(slugify("one   two---three"), "one-two-three");
+        assert_eq!(slugify("---leading"), "leading");
+        assert_eq!(slugify("trailing---"), "trailing");
+    }
+
+    #[test]
+    fn slugify_truncates_at_word_boundary() {
+        let long = "a ".repeat(100);
+        let slug = slugify(&long);
+        assert!(slug.len() <= MAX_SLUG_LEN);
+        assert!(!slug.ends_with('-'));
+    }
+
+    #[test]
+    fn slugify_empty_input() {
+        assert_eq!(slugify(""), "decision");
+        assert_eq!(slugify("!!!"), "decision");
+    }
+
+    // ── unique_decision_stem ────────────────────────────────────────────
+
+    #[test]
+    fn unique_stem_no_collision() {
+        let decisions = BTreeMap::new();
+        assert_eq!(
+            unique_decision_stem(&decisions, "use-redis").unwrap(),
+            "use-redis"
+        );
+    }
+
+    #[test]
+    fn unique_stem_appends_suffix_on_collision() {
+        let mut decisions = BTreeMap::new();
+        decisions.insert("use-redis".into(), sample_decision("use-redis", "project"));
+        assert_eq!(
+            unique_decision_stem(&decisions, "use-redis").unwrap(),
+            "use-redis-2"
+        );
+    }
+
+    #[test]
+    fn unique_stem_skips_taken_suffixes() {
+        let mut decisions = BTreeMap::new();
+        for name in &["use-redis", "use-redis-2", "use-redis-3"] {
+            decisions.insert(name.to_string(), sample_decision(name, "project"));
+        }
+        assert_eq!(
+            unique_decision_stem(&decisions, "use-redis").unwrap(),
+            "use-redis-4"
+        );
+    }
+
+    #[test]
+    fn unique_stem_disambiguates_reserved_name() {
+        let decisions = BTreeMap::new();
+        let stem = unique_decision_stem(&decisions, "project").unwrap();
+        assert_ne!(stem, "project", "reserved name must be disambiguated");
+        assert!(
+            stem.starts_with("project-"),
+            "disambiguated stem should keep the prefix: {stem}"
+        );
     }
 
     // ── validate ─────────────────────────────────────────────────────────
