@@ -6,7 +6,7 @@ mod state;
 mod write;
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -204,6 +204,20 @@ impl Store {
         Ok(toml::from_str(&content)?)
     }
 
+    /// Read a TOML file and compute its BLAKE3 hash in a single pass.
+    ///
+    /// Returns `(parsed, hex_hash)`. The hash is computed over the raw file
+    /// bytes (not the re-serialized TOML), matching the spec's integrity
+    /// semantics. This eliminates the double-read that would occur if
+    /// parsing and hashing were done separately.
+    fn read_toml_with_hash<T: DeserializeOwned>(&self, path: &Path) -> Result<(T, String)> {
+        let bytes = fs::read(path)?;
+        let hash = blake3::hash(&bytes).to_hex().to_string();
+        let content = std::str::from_utf8(&bytes)
+            .map_err(|_| Error::Validation(format!("invalid UTF-8 in {}", path.display())))?;
+        Ok((toml::from_str(content)?, hash))
+    }
+
     pub fn read_project(&self) -> Result<ProjectFile> {
         self.read_toml(&self.root.join("project.toml"))
     }
@@ -259,27 +273,37 @@ impl Store {
     // ── load_state ──────────────────────────────────────────────────────
 
     pub fn load_state(&self) -> Result<ProjectState> {
-        let project = self.read_project()?;
+        let (project, project_hash) =
+            self.read_toml_with_hash::<ProjectFile>(&self.root.join("project.toml"))?;
+
+        let mut hashes = HashMap::new();
+        hashes.insert("project".to_string(), project_hash);
 
         let mut components = BTreeMap::new();
         for name in self.list_components()? {
-            let file: ComponentFile = self.read_toml(&self.component_path(&name))?;
+            let (file, hash) =
+                self.read_toml_with_hash::<ComponentFile>(&self.component_path(&name))?;
+            hashes.insert(name.clone(), hash);
             components.insert(name, file);
         }
 
         let mut decisions = BTreeMap::new();
         for name in self.list_decisions()? {
-            let file: DecisionFile = self.read_toml(&self.decision_path(&name))?;
+            let (file, hash) =
+                self.read_toml_with_hash::<DecisionFile>(&self.decision_path(&name))?;
+            hashes.insert(name.clone(), hash);
             decisions.insert(name, file);
         }
 
         let mut patterns = BTreeMap::new();
         for name in self.list_patterns()? {
-            let file: PatternFile = self.read_toml(&self.pattern_path(&name))?;
+            let (file, hash) =
+                self.read_toml_with_hash::<PatternFile>(&self.pattern_path(&name))?;
+            hashes.insert(name.clone(), hash);
             patterns.insert(name, file);
         }
 
-        let graph_index = self.load_graph_index(&components, &decisions, &patterns)?;
+        let graph_index = self.load_graph_index(&components, &decisions, &patterns, &hashes)?;
 
         Ok(ProjectState::new(
             project,
@@ -292,16 +316,18 @@ impl Store {
 
     /// Reconcile the on-disk graph index with actual node files.
     ///
-    /// Reads `graph.toml` for edges that cannot be inferred from node files
-    /// (ConnectsTo, Supersedes, DependsOn, etc.), rebuilds the node list from
-    /// the actual files with fresh BLAKE3 hashes, preserves tags from existing
-    /// nodes, filters dangling edges, and ensures BelongsTo edges for all
-    /// decisions.
+    /// Uses pre-computed BLAKE3 hashes from `load_state`'s single-pass read,
+    /// avoiding a second read of every node file. Reads `graph.toml` for edges
+    /// that cannot be inferred from node files (ConnectsTo, Supersedes,
+    /// DependsOn, etc.), rebuilds the node list from the actual files,
+    /// preserves tags from existing nodes, filters dangling edges, and ensures
+    /// BelongsTo edges for all decisions.
     fn load_graph_index(
         &self,
         components: &BTreeMap<String, ComponentFile>,
         decisions: &BTreeMap<String, DecisionFile>,
         patterns: &BTreeMap<String, PatternFile>,
+        hashes: &HashMap<String, String>,
     ) -> Result<schema::GraphIndex> {
         let graph_path = self.graph_path();
 
@@ -327,9 +353,8 @@ impl Store {
         // Build node list from actual files, preserving tags from existing index.
         let mut nodes = Vec::new();
 
-        // Project virtual node.
-        let project_path = self.root.join("project.toml");
-        let project_hash = hash_file(&project_path)?;
+        // Project virtual node — hash pre-computed during load_state.
+        let project_hash = hashes.get("project").cloned().unwrap_or_default();
         let project_tags = existing_tags
             .get("project")
             .map(|t| t.to_vec())
@@ -342,7 +367,7 @@ impl Store {
         });
 
         for name in components.keys() {
-            let hash = hash_file(&self.component_path(name))?;
+            let hash = hashes.get(name.as_str()).cloned().unwrap_or_default();
             let tags = existing_tags
                 .get(name.as_str())
                 .map(|t| t.to_vec())
@@ -356,7 +381,7 @@ impl Store {
         }
 
         for name in decisions.keys() {
-            let hash = hash_file(&self.decision_path(name))?;
+            let hash = hashes.get(name.as_str()).cloned().unwrap_or_default();
             let tags = existing_tags
                 .get(name.as_str())
                 .map(|t| t.to_vec())
@@ -370,7 +395,7 @@ impl Store {
         }
 
         for name in patterns.keys() {
-            let hash = hash_file(&self.pattern_path(name))?;
+            let hash = hashes.get(name.as_str()).cloned().unwrap_or_default();
             let tags = existing_tags
                 .get(name.as_str())
                 .map(|t| t.to_vec())
