@@ -184,7 +184,7 @@ pub fn resolve_provider(
 ) -> Result<ProviderConfig> {
     let config = load_config_file()?;
     let env_keys = EnvKeys::from_env();
-    resolve_from_sources(provider_flag, model_flag, &config, &env_keys)
+    resolve_from_sources(provider_flag, model_flag, config.as_ref(), &env_keys)
 }
 
 pub fn config_file_path() -> Option<PathBuf> {
@@ -196,7 +196,7 @@ pub fn config_file_path() -> Option<PathBuf> {
 fn resolve_from_sources(
     provider_flag: Option<&str>,
     model_flag: Option<&str>,
-    config: &Option<ConfigFile>,
+    config: Option<&ConfigFile>,
     env_keys: &EnvKeys,
 ) -> Result<ProviderConfig> {
     let provider = resolve_provider_choice(provider_flag, config, env_keys)?;
@@ -204,7 +204,7 @@ fn resolve_from_sources(
 
     let model = model_flag
         .map(String::from)
-        .or_else(|| config.as_ref().and_then(|c| c.default_model.clone()))
+        .or_else(|| config.and_then(|c| c.default_model.clone()))
         .unwrap_or_else(|| provider.default_model().into());
 
     Ok(ProviderConfig {
@@ -216,7 +216,7 @@ fn resolve_from_sources(
 
 fn resolve_provider_choice(
     flag: Option<&str>,
-    config: &Option<ConfigFile>,
+    config: Option<&ConfigFile>,
     env_keys: &EnvKeys,
 ) -> Result<Provider> {
     // CLI flag wins
@@ -235,9 +235,9 @@ fn resolve_provider_choice(
     auto_detect_provider(config, env_keys)
 }
 
-fn auto_detect_provider(config: &Option<ConfigFile>, env_keys: &EnvKeys) -> Result<Provider> {
+fn auto_detect_provider(config: Option<&ConfigFile>, env_keys: &EnvKeys) -> Result<Provider> {
     let has_key = |p: Provider| -> bool {
-        env_keys.get(p).is_some() || config.as_ref().and_then(|c| c.key_for(p)).is_some()
+        env_keys.get(p).is_some() || config.and_then(|c| c.key_for(p)).is_some()
     };
 
     let found: Vec<Provider> = ALL_PROVIDERS
@@ -270,7 +270,7 @@ fn auto_detect_provider(config: &Option<ConfigFile>, env_keys: &EnvKeys) -> Resu
 fn resolve_key(
     provider: Provider,
     env_keys: &EnvKeys,
-    config: &Option<ConfigFile>,
+    config: Option<&ConfigFile>,
 ) -> Result<ApiKey> {
     if let Some(val) = env_keys.get(provider) {
         return Ok(ApiKey::new(val.to_string()));
@@ -489,7 +489,7 @@ mod tests {
     #[test]
     fn resolve_env_key_with_explicit_provider() {
         let env = env_anthropic();
-        let r = resolve_from_sources(Some("anthropic"), None, &None, &env).unwrap();
+        let r = resolve_from_sources(Some("anthropic"), None, None, &env).unwrap();
         assert_eq!(r.provider, Provider::Anthropic);
         assert_eq!(r.key.expose(), "sk-ant-test-key-1234");
     }
@@ -497,7 +497,7 @@ mod tests {
     #[test]
     fn resolve_auto_detects_single_provider() {
         let env = env_anthropic();
-        let r = resolve_from_sources(None, None, &None, &env).unwrap();
+        let r = resolve_from_sources(None, None, None, &env).unwrap();
         assert_eq!(r.provider, Provider::Anthropic);
     }
 
@@ -505,7 +505,7 @@ mod tests {
     fn resolve_env_overrides_config_key() {
         let env = env_anthropic();
         let config = config_with_key(Provider::Anthropic, "sk-ant-config-5678");
-        let r = resolve_from_sources(Some("anthropic"), None, &config, &env).unwrap();
+        let r = resolve_from_sources(Some("anthropic"), None, config.as_ref(), &env).unwrap();
         assert_eq!(r.key.expose(), "sk-ant-test-key-1234");
     }
 
@@ -513,7 +513,7 @@ mod tests {
     fn resolve_falls_back_to_config_key() {
         let env = env_with(None, None, None);
         let config = config_with_key(Provider::Anthropic, "sk-ant-config-5678");
-        let r = resolve_from_sources(Some("anthropic"), None, &config, &env).unwrap();
+        let r = resolve_from_sources(Some("anthropic"), None, config.as_ref(), &env).unwrap();
         assert_eq!(r.key.expose(), "sk-ant-config-5678");
     }
 
@@ -521,7 +521,7 @@ mod tests {
     fn resolve_config_default_provider() {
         let env = env_anthropic();
         let config = config_with_defaults(Some("anthropic"), None);
-        let r = resolve_from_sources(None, None, &config, &env).unwrap();
+        let r = resolve_from_sources(None, None, config.as_ref(), &env).unwrap();
         assert_eq!(r.provider, Provider::Anthropic);
     }
 
@@ -529,7 +529,7 @@ mod tests {
     fn resolve_provider_flag_overrides_config_default() {
         let env = env_with(Some("key-a"), Some("key-o"), None);
         let config = config_with_defaults(Some("anthropic"), None);
-        let r = resolve_from_sources(Some("openai"), None, &config, &env).unwrap();
+        let r = resolve_from_sources(Some("openai"), None, config.as_ref(), &env).unwrap();
         assert_eq!(r.provider, Provider::OpenAi);
     }
 
@@ -537,7 +537,8 @@ mod tests {
     fn resolve_model_flag_overrides_all() {
         let env = env_anthropic();
         let config = config_with_defaults(None, Some("config-model"));
-        let r = resolve_from_sources(Some("anthropic"), Some("flag-model"), &config, &env).unwrap();
+        let r = resolve_from_sources(Some("anthropic"), Some("flag-model"), config.as_ref(), &env)
+            .unwrap();
         assert_eq!(r.model, "flag-model");
     }
 
@@ -545,25 +546,25 @@ mod tests {
     fn resolve_model_from_config() {
         let env = env_anthropic();
         let config = config_with_defaults(None, Some("custom-model"));
-        let r = resolve_from_sources(Some("anthropic"), None, &config, &env).unwrap();
+        let r = resolve_from_sources(Some("anthropic"), None, config.as_ref(), &env).unwrap();
         assert_eq!(r.model, "custom-model");
     }
 
     #[test]
     fn resolve_model_default_per_provider() {
         let env = env_anthropic();
-        let r = resolve_from_sources(Some("anthropic"), None, &None, &env).unwrap();
+        let r = resolve_from_sources(Some("anthropic"), None, None, &env).unwrap();
         assert_eq!(r.model, "claude-sonnet-4-20250514");
 
         let env = env_with(None, Some("key"), None);
-        let r = resolve_from_sources(Some("openai"), None, &None, &env).unwrap();
+        let r = resolve_from_sources(Some("openai"), None, None, &env).unwrap();
         assert_eq!(r.model, "gpt-4o");
     }
 
     #[test]
     fn resolve_fails_no_keys() {
         let env = env_with(None, None, None);
-        let err = resolve_from_sources(None, None, &None, &env).unwrap_err();
+        let err = resolve_from_sources(None, None, None, &env).unwrap_err();
         match err {
             Error::ProviderConfig(msg) => assert!(msg.contains("no API key found")),
             other => panic!("expected Validation, got: {other}"),
@@ -573,7 +574,7 @@ mod tests {
     #[test]
     fn resolve_fails_multiple_keys_no_provider() {
         let env = env_with(Some("key-a"), Some("key-b"), None);
-        let err = resolve_from_sources(None, None, &None, &env).unwrap_err();
+        let err = resolve_from_sources(None, None, None, &env).unwrap_err();
         match err {
             Error::ProviderConfig(msg) => {
                 assert!(msg.contains("multiple API keys"), "{msg}");
@@ -586,7 +587,7 @@ mod tests {
     #[test]
     fn resolve_explicit_provider_picks_from_multiple() {
         let env = env_with(Some("key-a"), Some("key-b"), None);
-        let r = resolve_from_sources(Some("openai"), None, &None, &env).unwrap();
+        let r = resolve_from_sources(Some("openai"), None, None, &env).unwrap();
         assert_eq!(r.provider, Provider::OpenAi);
         assert_eq!(r.key.expose(), "key-b");
     }
@@ -594,7 +595,7 @@ mod tests {
     #[test]
     fn resolve_fails_provider_without_key() {
         let env = env_anthropic();
-        let err = resolve_from_sources(Some("openai"), None, &None, &env).unwrap_err();
+        let err = resolve_from_sources(Some("openai"), None, None, &env).unwrap_err();
         match err {
             Error::ProviderConfig(msg) => {
                 assert!(msg.contains("openai"), "{msg}");
@@ -608,7 +609,7 @@ mod tests {
     fn resolve_auto_detect_includes_config_keys() {
         let env = env_with(None, None, None);
         let config = config_with_key(Provider::OpenRouter, "sk-or-key");
-        let r = resolve_from_sources(None, None, &config, &env).unwrap();
+        let r = resolve_from_sources(None, None, config.as_ref(), &env).unwrap();
         assert_eq!(r.provider, Provider::OpenRouter);
     }
 

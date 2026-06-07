@@ -16,6 +16,7 @@ use super::{Store, StoreLock};
 
 /// A file write staged for batch commit.
 /// Created via [`Store::prepare_write`], executed via [`Store::commit_batch`].
+#[must_use = "a pending write must be passed to commit_batch or commit_with_graph"]
 pub struct PendingWrite {
     pub(crate) target: PathBuf,
     pub(crate) content: String,
@@ -23,6 +24,7 @@ pub struct PendingWrite {
 
 impl PendingWrite {
     /// BLAKE3 hash of the serialized content that will be written.
+    #[must_use]
     pub fn content_hash(&self) -> String {
         super::hash_bytes(self.content.as_bytes())
     }

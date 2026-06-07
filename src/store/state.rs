@@ -78,21 +78,7 @@ impl ProjectState {
         decisions: &BTreeMap<String, DecisionFile>,
         patterns: &BTreeMap<String, PatternFile>,
     ) -> InMemoryGraph {
-        InMemoryGraph::build(
-            graph_index,
-            components
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            decisions
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            patterns
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-        )
+        InMemoryGraph::build(graph_index, components, decisions, patterns)
     }
 }
 
@@ -101,6 +87,7 @@ impl ProjectState {
 /// Check whether a name is valid kebab-case.
 /// Rules: non-empty, lowercase ASCII letters + digits + hyphens only,
 /// no leading/trailing/consecutive hyphens.
+#[must_use]
 pub fn is_valid_kebab_case(name: &str) -> bool {
     !name.is_empty()
         && !name.starts_with('-')
@@ -114,6 +101,7 @@ pub fn is_valid_kebab_case(name: &str) -> bool {
 /// Names reserved for internal graph nodes. These cannot be used as
 /// component, decision, or pattern identifiers because they would collide
 /// with virtual nodes in the graph index.
+#[must_use]
 pub fn is_reserved_node_name(name: &str) -> bool {
     name == "project"
 }
@@ -129,6 +117,7 @@ const MAX_SLUG_LEN: usize = 60;
 /// with hyphens. Collapses runs, strips leading/trailing hyphens,
 /// truncates at a word boundary, and falls back to `"decision"` for
 /// empty input.
+#[must_use]
 pub fn slugify(input: &str) -> String {
     let mut slug = String::with_capacity(input.len());
     let mut prev_hyphen = true;

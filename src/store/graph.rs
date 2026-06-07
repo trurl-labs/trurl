@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -61,11 +61,12 @@ impl InMemoryGraph {
     ///
     /// All node names are interned as [`Arc<str>`] for zero-cost sharing
     /// across adjacency maps, content caches, and query results.
+    #[must_use]
     pub fn build(
         index: &GraphIndex,
-        components: HashMap<String, ComponentFile>,
-        decisions: HashMap<String, DecisionFile>,
-        patterns: HashMap<String, PatternFile>,
+        components: &BTreeMap<String, ComponentFile>,
+        decisions: &BTreeMap<String, DecisionFile>,
+        patterns: &BTreeMap<String, PatternFile>,
     ) -> Self {
         // Intern every name that appears in nodes or edges.
         let mut pool: HashMap<String, Arc<str>> = HashMap::with_capacity(index.nodes.len());
@@ -114,14 +115,17 @@ impl InMemoryGraph {
             forward,
             reverse,
             components: components
-                .into_iter()
-                .map(|(k, v)| (intern(&k), v))
+                .iter()
+                .map(|(k, v)| (intern(k), v.clone()))
                 .collect(),
             decisions: decisions
-                .into_iter()
-                .map(|(k, v)| (intern(&k), v))
+                .iter()
+                .map(|(k, v)| (intern(k), v.clone()))
                 .collect(),
-            patterns: patterns.into_iter().map(|(k, v)| (intern(&k), v)).collect(),
+            patterns: patterns
+                .iter()
+                .map(|(k, v)| (intern(k), v.clone()))
+                .collect(),
         }
     }
 
@@ -280,10 +284,12 @@ impl InMemoryGraph {
 
     // ── Content access ───────────────────────────────────────────────────
 
+    #[allow(dead_code)] // used in tests; graph query API for future phases
     pub fn component(&self, name: &str) -> Option<&ComponentFile> {
         self.components.get(name)
     }
 
+    #[allow(dead_code)] // used in tests; graph query API for future phases
     pub fn decision(&self, name: &str) -> Option<&DecisionFile> {
         self.decisions.get(name)
     }
@@ -293,18 +299,22 @@ impl InMemoryGraph {
         self.patterns.get(name)
     }
 
+    #[allow(dead_code)] // used in tests; graph query API for future phases
     pub fn node_meta(&self, name: &str) -> Option<&NodeMeta> {
         self.nodes.get(name)
     }
 
+    #[allow(dead_code)] // used in tests; graph query API for future phases
     pub fn component_count(&self) -> usize {
         self.components.len()
     }
 
+    #[allow(dead_code)] // used in tests; graph query API for future phases
     pub fn decision_count(&self) -> usize {
         self.decisions.len()
     }
 
+    #[allow(dead_code)] // used in tests; graph query API for future phases
     pub fn pattern_count(&self) -> usize {
         self.patterns.len()
     }
@@ -312,6 +322,7 @@ impl InMemoryGraph {
     // ── Validation ───────────────────────────────────────────────────────
 
     /// Full graph integrity check. Returns empty vec when valid.
+    #[must_use]
     pub fn validate(&self) -> Vec<Issue> {
         let mut issues = Vec::new();
         self.check_edge_endpoints(&mut issues);
@@ -330,6 +341,7 @@ impl InMemoryGraph {
     // ── Serialization ────────────────────────────────────────────────────
 
     /// Export current state as [`GraphIndex`] (sorted for deterministic output).
+    #[must_use]
     pub fn to_index(&self) -> GraphIndex {
         let mut nodes: Vec<NodeEntry> = self
             .nodes
@@ -850,7 +862,7 @@ mod tests {
             ],
         };
 
-        let mut components = HashMap::new();
+        let mut components = BTreeMap::new();
         for name in ["auth", "database", "rate-limiter"] {
             components.insert(
                 name.into(),
@@ -863,7 +875,7 @@ mod tests {
             );
         }
 
-        let mut decisions = HashMap::new();
+        let mut decisions = BTreeMap::new();
         decisions.insert(
             "use-jwt".into(),
             DecisionFile {
@@ -901,7 +913,7 @@ mod tests {
             },
         );
 
-        InMemoryGraph::build(&index, components, decisions, HashMap::new())
+        InMemoryGraph::build(&index, &components, &decisions, &BTreeMap::new())
     }
 
     /// Graph with a DependsOn chain: d-a → d-b → d-c (depth 3 test).
@@ -985,7 +997,7 @@ mod tests {
                 },
             ],
         };
-        let mut components = HashMap::new();
+        let mut components = BTreeMap::new();
         components.insert(
             "comp".into(),
             ComponentFile {
@@ -995,7 +1007,7 @@ mod tests {
                 },
             },
         );
-        let mut decisions = HashMap::new();
+        let mut decisions = BTreeMap::new();
         for name in ["d-a", "d-b", "d-c", "d-d"] {
             decisions.insert(
                 name.into(),
@@ -1010,7 +1022,7 @@ mod tests {
                 },
             );
         }
-        InMemoryGraph::build(&index, components, decisions, HashMap::new())
+        InMemoryGraph::build(&index, &components, &decisions, &BTreeMap::new())
     }
 
     // ── build ────────────────────────────────────────────────────────────
@@ -1232,8 +1244,8 @@ mod tests {
             ],
         };
         let _ = &mut index; // suppress unused_mut
-        let mut decisions = HashMap::new();
-        let mut components = HashMap::new();
+        let mut decisions = BTreeMap::new();
+        let mut components = BTreeMap::new();
         components.insert(
             "comp".into(),
             ComponentFile {
@@ -1257,7 +1269,7 @@ mod tests {
                 },
             );
         }
-        let g = InMemoryGraph::build(&index, components, decisions, HashMap::new());
+        let g = InMemoryGraph::build(&index, &components, &decisions, &BTreeMap::new());
         let deps = g.transitive_deps("d-a");
         // Depth 1: d-b, depth 2: d-c, depth 3: d-d. d-e is depth 4 → excluded.
         assert_eq!(deps.len(), 3);
@@ -1341,7 +1353,7 @@ mod tests {
                 },
             ],
         };
-        let mut components = HashMap::new();
+        let mut components = BTreeMap::new();
         components.insert(
             "comp".into(),
             ComponentFile {
@@ -1351,7 +1363,7 @@ mod tests {
                 },
             },
         );
-        let mut decisions = HashMap::new();
+        let mut decisions = BTreeMap::new();
         for n in ["d1", "d2"] {
             decisions.insert(
                 n.into(),
@@ -1366,7 +1378,7 @@ mod tests {
                 },
             );
         }
-        let mut patterns = HashMap::new();
+        let mut patterns = BTreeMap::new();
         patterns.insert(
             "my-pattern".into(),
             PatternFile {
@@ -1377,7 +1389,7 @@ mod tests {
             },
         );
 
-        let g = InMemoryGraph::build(&index, components, decisions, patterns);
+        let g = InMemoryGraph::build(&index, &components, &decisions, &patterns);
         let pats = g.patterns_for("comp");
         assert_eq!(pats.len(), 1);
         assert_eq!(pats[0].0.as_ref(), "my-pattern");
@@ -1472,7 +1484,7 @@ mod tests {
                 kind: EdgeKind::BelongsTo,
             }],
         };
-        let g = InMemoryGraph::build(&index, HashMap::new(), HashMap::new(), HashMap::new());
+        let g = InMemoryGraph::build(&index, &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
         let issues = g.validate();
         assert!(issues.iter().any(|i| i.message.contains("ghost")));
     }
@@ -1507,7 +1519,7 @@ mod tests {
                 },
             ],
         };
-        let g = InMemoryGraph::build(&index, HashMap::new(), HashMap::new(), HashMap::new());
+        let g = InMemoryGraph::build(&index, &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
         let issues = g.validate();
         assert!(
             issues
@@ -1541,7 +1553,7 @@ mod tests {
                 kind: EdgeKind::ConnectsTo,
             }],
         };
-        let g = InMemoryGraph::build(&index, HashMap::new(), HashMap::new(), HashMap::new());
+        let g = InMemoryGraph::build(&index, &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
         let issues = g.validate();
         assert!(issues.iter().any(|i| i.message.contains("ConnectsTo")));
     }
@@ -1565,7 +1577,7 @@ mod tests {
                 kind: EdgeKind::ConnectsTo,
             }],
         };
-        let g = InMemoryGraph::build(&index, HashMap::new(), HashMap::new(), HashMap::new());
+        let g = InMemoryGraph::build(&index, &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
         let issues = g.validate();
         assert!(issues.iter().any(|i| i.message.contains("self-edge")));
     }
@@ -1604,7 +1616,7 @@ mod tests {
                 },
             ],
         };
-        let g = InMemoryGraph::build(&index, HashMap::new(), HashMap::new(), HashMap::new());
+        let g = InMemoryGraph::build(&index, &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
         let issues = g.validate();
         assert!(issues.iter().any(|i| i.message.contains("duplicate")));
     }
@@ -1636,7 +1648,7 @@ mod tests {
                 kind: EdgeKind::MemberOf,
             }],
         };
-        let g = InMemoryGraph::build(&index, HashMap::new(), HashMap::new(), HashMap::new());
+        let g = InMemoryGraph::build(&index, &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
         let issues = g.validate();
         assert!(issues.iter().any(|i| i.message.contains("minimum 2")));
     }
@@ -1675,7 +1687,7 @@ mod tests {
                 },
             ],
         };
-        let mut decisions = HashMap::new();
+        let mut decisions = BTreeMap::new();
         for n in ["d1", "d2"] {
             decisions.insert(
                 n.into(),
@@ -1690,7 +1702,7 @@ mod tests {
                 },
             );
         }
-        let g = InMemoryGraph::build(&index, HashMap::new(), decisions, HashMap::new());
+        let g = InMemoryGraph::build(&index, &BTreeMap::new(), &decisions, &BTreeMap::new());
         let issues = g.validate();
         assert!(issues.iter().any(|i| i.message.contains("cycle")));
     }
@@ -1710,7 +1722,7 @@ mod tests {
             }],
             edges: vec![],
         };
-        let mut decisions = HashMap::new();
+        let mut decisions = BTreeMap::new();
         decisions.insert(
             "bad".into(),
             DecisionFile {
@@ -1723,7 +1735,7 @@ mod tests {
                 },
             },
         );
-        let g = InMemoryGraph::build(&index, HashMap::new(), decisions, HashMap::new());
+        let g = InMemoryGraph::build(&index, &BTreeMap::new(), &decisions, &BTreeMap::new());
         let issues = g.validate();
         assert!(issues.iter().any(|i| i.message.contains("empty choice")));
     }
@@ -1741,7 +1753,7 @@ mod tests {
             }],
             edges: vec![],
         };
-        let mut decisions = HashMap::new();
+        let mut decisions = BTreeMap::new();
         decisions.insert(
             "bad".into(),
             DecisionFile {
@@ -1754,7 +1766,7 @@ mod tests {
                 },
             },
         );
-        let g = InMemoryGraph::build(&index, HashMap::new(), decisions, HashMap::new());
+        let g = InMemoryGraph::build(&index, &BTreeMap::new(), &decisions, &BTreeMap::new());
         let issues = g.validate();
         assert!(issues.iter().any(|i| i.message.contains("empty reason")));
     }
@@ -1774,7 +1786,7 @@ mod tests {
             }],
             edges: vec![],
         };
-        let mut components = HashMap::new();
+        let mut components = BTreeMap::new();
         components.insert(
             "auth".into(),
             ComponentFile {
@@ -1784,7 +1796,7 @@ mod tests {
                 },
             },
         );
-        let g = InMemoryGraph::build(&index, components, HashMap::new(), HashMap::new());
+        let g = InMemoryGraph::build(&index, &components, &BTreeMap::new(), &BTreeMap::new());
         let issues = g.validate();
         assert!(issues.iter().any(|i| i.message.contains("does not match")));
     }
@@ -1802,7 +1814,7 @@ mod tests {
             }],
             edges: vec![],
         };
-        let mut components = HashMap::new();
+        let mut components = BTreeMap::new();
         components.insert(
             "Bad_Name".into(),
             ComponentFile {
@@ -1812,7 +1824,7 @@ mod tests {
                 },
             },
         );
-        let g = InMemoryGraph::build(&index, components, HashMap::new(), HashMap::new());
+        let g = InMemoryGraph::build(&index, &components, &BTreeMap::new(), &BTreeMap::new());
         let issues = g.validate();
         assert!(issues.iter().any(|i| i.message.contains("kebab-case")));
     }
@@ -1849,15 +1861,15 @@ mod tests {
         let idx = g.to_index();
 
         // Rebuild from the exported index.
-        let mut components = HashMap::new();
+        let mut components = BTreeMap::new();
         for (k, v) in &g.components {
             components.insert(k.to_string(), v.clone());
         }
-        let mut decisions = HashMap::new();
+        let mut decisions = BTreeMap::new();
         for (k, v) in &g.decisions {
             decisions.insert(k.to_string(), v.clone());
         }
-        let g2 = InMemoryGraph::build(&idx, components, decisions, HashMap::new());
+        let g2 = InMemoryGraph::build(&idx, &components, &decisions, &BTreeMap::new());
 
         assert_eq!(g2.component_count(), g.component_count());
         assert_eq!(g2.decision_count(), g.decision_count());
@@ -1899,7 +1911,7 @@ mod tests {
             ],
             edges: vec![], // no BelongsTo edge
         };
-        let mut decisions = HashMap::new();
+        let mut decisions = BTreeMap::new();
         decisions.insert(
             "dec".into(),
             DecisionFile {
@@ -1912,7 +1924,7 @@ mod tests {
                 },
             },
         );
-        let mut components = HashMap::new();
+        let mut components = BTreeMap::new();
         components.insert(
             "comp".into(),
             ComponentFile {
@@ -1922,7 +1934,7 @@ mod tests {
                 },
             },
         );
-        let g = InMemoryGraph::build(&index, components, decisions, HashMap::new());
+        let g = InMemoryGraph::build(&index, &components, &decisions, &BTreeMap::new());
         let issues = g.validate();
         assert!(issues.iter().any(|i| i.message.contains("no BelongsTo")));
     }
@@ -1965,7 +1977,7 @@ mod tests {
                 },
             ],
         };
-        let mut decisions = HashMap::new();
+        let mut decisions = BTreeMap::new();
         decisions.insert(
             "dec".into(),
             DecisionFile {
@@ -1978,7 +1990,7 @@ mod tests {
                 },
             },
         );
-        let mut components = HashMap::new();
+        let mut components = BTreeMap::new();
         components.insert(
             "comp-a".into(),
             ComponentFile {
@@ -1997,7 +2009,7 @@ mod tests {
                 },
             },
         );
-        let g = InMemoryGraph::build(&index, components, decisions, HashMap::new());
+        let g = InMemoryGraph::build(&index, &components, &decisions, &BTreeMap::new());
         let issues = g.validate();
         assert!(
             issues
@@ -2037,7 +2049,7 @@ mod tests {
                 kind: EdgeKind::BelongsTo,
             }],
         };
-        let mut decisions = HashMap::new();
+        let mut decisions = BTreeMap::new();
         decisions.insert(
             "dec".into(),
             DecisionFile {
@@ -2050,7 +2062,7 @@ mod tests {
                 },
             },
         );
-        let mut components = HashMap::new();
+        let mut components = BTreeMap::new();
         components.insert(
             "comp-a".into(),
             ComponentFile {
@@ -2069,7 +2081,7 @@ mod tests {
                 },
             },
         );
-        let g = InMemoryGraph::build(&index, components, decisions, HashMap::new());
+        let g = InMemoryGraph::build(&index, &components, &decisions, &BTreeMap::new());
         let issues = g.validate();
         assert!(
             issues
@@ -2093,7 +2105,7 @@ mod tests {
             }],
             edges: vec![],
         };
-        let mut patterns = HashMap::new();
+        let mut patterns = BTreeMap::new();
         patterns.insert(
             "pat".into(),
             PatternFile {
@@ -2103,7 +2115,7 @@ mod tests {
                 },
             },
         );
-        let g = InMemoryGraph::build(&index, HashMap::new(), HashMap::new(), patterns);
+        let g = InMemoryGraph::build(&index, &BTreeMap::new(), &BTreeMap::new(), &patterns);
         let issues = g.validate();
         assert!(issues.iter().any(|i| i.message.contains("empty name")));
     }
@@ -2162,7 +2174,7 @@ mod tests {
                 },
             ],
         };
-        let mut decisions = HashMap::new();
+        let mut decisions = BTreeMap::new();
         for n in ["d1", "d2"] {
             decisions.insert(
                 n.into(),
@@ -2177,7 +2189,7 @@ mod tests {
                 },
             );
         }
-        let mut patterns = HashMap::new();
+        let mut patterns = BTreeMap::new();
         patterns.insert(
             "state-in-redis".into(),
             PatternFile {
@@ -2188,7 +2200,7 @@ mod tests {
                 },
             },
         );
-        let g = InMemoryGraph::build(&index, HashMap::new(), decisions, patterns);
+        let g = InMemoryGraph::build(&index, &BTreeMap::new(), &decisions, &patterns);
         let issues = g.validate();
         // Must NOT produce any warnings or errors about name mismatch.
         assert!(
@@ -2222,7 +2234,7 @@ mod tests {
             edges: vec![],
         };
         // ghost exists in nodes but has no DecisionFile in the content map.
-        let g = InMemoryGraph::build(&index, HashMap::new(), HashMap::new(), HashMap::new());
+        let g = InMemoryGraph::build(&index, &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
         let issues = g.validate();
         assert!(
             issues
@@ -2247,7 +2259,7 @@ mod tests {
             edges: vec![],
         };
         // "project" has no ComponentFile — it's virtual. Must not error.
-        let g = InMemoryGraph::build(&index, HashMap::new(), HashMap::new(), HashMap::new());
+        let g = InMemoryGraph::build(&index, &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
         let issues = g.validate();
         assert!(
             !issues.iter().any(|i| i.message.contains("no content")),
@@ -2283,7 +2295,7 @@ mod tests {
                 kind: EdgeKind::BelongsTo,
             }],
         };
-        let mut decisions = HashMap::new();
+        let mut decisions = BTreeMap::new();
         decisions.insert(
             "Bad_Key".into(),
             DecisionFile {
@@ -2296,7 +2308,7 @@ mod tests {
                 },
             },
         );
-        let g = InMemoryGraph::build(&index, HashMap::new(), decisions, HashMap::new());
+        let g = InMemoryGraph::build(&index, &BTreeMap::new(), &decisions, &BTreeMap::new());
         let issues = g.validate();
         assert!(
             issues

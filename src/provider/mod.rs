@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use reqwest::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::{Provider, ProviderConfig};
 use crate::{Error, Result};
@@ -20,7 +20,8 @@ pub struct Message {
     pub content: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Role {
     User,
     Assistant,
@@ -75,12 +76,14 @@ pub fn create_provider(config: ProviderConfig) -> Result<Box<dyn LlmProvider>> {
             config.key,
             config.model,
             "https://api.openai.com/v1",
+            false,
         )),
         Provider::OpenRouter => Box::new(openai::OpenAiClient::new(
             client,
             config.key,
             config.model,
             "https://openrouter.ai/api/v1",
+            true,
         )),
     })
 }

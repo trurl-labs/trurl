@@ -217,8 +217,8 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
     })
 });
 
-pub(crate) fn tool_list() -> Value {
-    TOOL_DEFINITIONS.clone()
+pub(crate) fn tool_list() -> &'static Value {
+    &TOOL_DEFINITIONS
 }
 
 // ── Tool classification ─────────────────────────────────────────────────────

@@ -23,17 +23,25 @@ pub(super) struct OpenAiClient {
     key: ApiKey,
     model: String,
     base_url: String,
+    is_openrouter: bool,
 }
 
 impl OpenAiClient {
     const MAX_TOKENS: u32 = 4096;
 
-    pub fn new(client: Client, key: ApiKey, model: String, base_url: &str) -> Self {
+    pub fn new(
+        client: Client,
+        key: ApiKey,
+        model: String,
+        base_url: &str,
+        is_openrouter: bool,
+    ) -> Self {
         Self {
             client,
             key,
             model,
             base_url: base_url.into(),
+            is_openrouter,
         }
     }
 
@@ -72,7 +80,7 @@ impl OpenAiClient {
             .header("authorization", format!("Bearer {}", self.key.expose()))
             .header("content-type", "application/json");
 
-        if self.base_url.contains("openrouter") {
+        if self.is_openrouter {
             req = req
                 .header("http-referer", "https://github.com/trurl-labs/trurl")
                 .header("x-title", "trurl");
@@ -91,7 +99,7 @@ impl OpenAiClient {
 
 impl LlmProvider for OpenAiClient {
     fn provider_name(&self) -> &'static str {
-        if self.base_url.contains("openrouter") {
+        if self.is_openrouter {
             "openai-compatible/openrouter"
         } else {
             "openai"

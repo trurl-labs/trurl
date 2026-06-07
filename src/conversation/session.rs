@@ -17,7 +17,7 @@ pub(crate) struct Session {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub(crate) struct SessionMessage {
-    role: String,
+    role: Role,
     content: String,
 }
 
@@ -30,9 +30,9 @@ impl Session {
         }
     }
 
-    pub fn add_message(&mut self, role: &str, content: &str) {
+    pub fn add_message(&mut self, role: Role, content: &str) {
         self.messages.push(SessionMessage {
-            role: role.into(),
+            role,
             content: content.into(),
         });
     }
@@ -41,11 +41,7 @@ impl Session {
         self.messages
             .iter()
             .map(|m| Message {
-                role: if m.role == "user" {
-                    Role::User
-                } else {
-                    Role::Assistant
-                },
+                role: m.role,
                 content: m.content.clone(),
             })
             .collect()
@@ -110,8 +106,8 @@ mod tests {
     #[test]
     fn session_serializes_and_deserializes() {
         let mut session = Session::new("auth");
-        session.add_message("assistant", "What token format?");
-        session.add_message("user", "JWT");
+        session.add_message(Role::Assistant, "What token format?");
+        session.add_message(Role::User, "JWT");
         session.decisions_recorded.push("use-jwt".into());
 
         let json = serde_json::to_string(&session).unwrap();
@@ -125,8 +121,8 @@ mod tests {
     #[test]
     fn session_to_provider_messages() {
         let mut session = Session::new("auth");
-        session.add_message("assistant", "Q?");
-        session.add_message("user", "A.");
+        session.add_message(Role::Assistant, "Q?");
+        session.add_message(Role::User, "A.");
 
         let messages = session.to_provider_messages();
         assert_eq!(messages.len(), 2);

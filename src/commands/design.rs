@@ -39,8 +39,7 @@ pub fn design(
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
-        .build()
-        .map_err(|e| Error::Io(std::io::Error::other(e)))?;
+        .build()?;
 
     rt.block_on(crate::conversation::run_design(
         &store,

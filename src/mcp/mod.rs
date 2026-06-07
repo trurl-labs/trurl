@@ -109,7 +109,7 @@ fn handle(
         }
         "ping" => Ok(serde_json::json!({})),
         // Gate: tool operations require initialization.
-        "tools/list" if *initialized => Ok(tools::tool_list()),
+        "tools/list" if *initialized => Ok(tools::tool_list().clone()),
         "tools/call" if *initialized => handle_tools_call(store, state, &request.params),
         "tools/list" | "tools/call" => Err((
             INVALID_REQUEST,

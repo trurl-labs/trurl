@@ -1,4 +1,3 @@
-#[allow(dead_code)] // query + cycle methods consumed incrementally through Phases 5-7
 pub mod graph;
 pub mod schema;
 
@@ -43,6 +42,7 @@ pub(crate) fn hash_file(path: &Path) -> Result<String> {
 }
 
 /// BLAKE3 hash of an in-memory byte slice, returned as lowercase hex.
+#[must_use]
 pub(crate) fn hash_bytes(data: &[u8]) -> String {
     blake3::hash(data).to_hex().to_string()
 }
@@ -475,6 +475,7 @@ impl Store {
 // ── StoreLock ────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
+#[must_use = "dropping the lock immediately releases it"]
 pub struct StoreLock {
     _file: File,
 }

@@ -29,7 +29,7 @@ pub(crate) fn discover_store(cwd: &Path) -> Result<Store> {
     Ok(store)
 }
 
-pub(crate) fn warn_on_issues(state: &ProjectState) {
+fn warn_on_issues(state: &ProjectState) {
     let issues = state.validate();
     let errors = issues
         .iter()

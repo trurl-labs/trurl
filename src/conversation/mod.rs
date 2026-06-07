@@ -111,7 +111,7 @@ async fn conversation_loop(
             role: Role::Assistant,
             content: response,
         });
-        session.add_message("assistant", messages.last().map_or("", |m| &m.content));
+        session.add_message(Role::Assistant, messages.last().map_or("", |m| &m.content));
         session::save(store, session)?;
 
         print!("\n> ");
@@ -130,7 +130,7 @@ async fn conversation_loop(
             role: Role::User,
             content: input.clone(),
         });
-        session.add_message("user", &input);
+        session.add_message(Role::User, &input);
         session::save(store, session)?;
     }
 }
