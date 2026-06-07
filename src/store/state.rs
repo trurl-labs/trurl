@@ -111,6 +111,13 @@ pub fn is_valid_kebab_case(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
+/// Names reserved for internal graph nodes. These cannot be used as
+/// component, decision, or pattern identifiers because they would collide
+/// with virtual nodes in the graph index.
+pub fn is_reserved_node_name(name: &str) -> bool {
+    name == "project"
+}
+
 pub(super) fn list_toml_stems(dir: &Path) -> Result<Vec<String>> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -165,6 +172,16 @@ mod tests {
         assert!(!is_valid_kebab_case("has space"));
         assert!(!is_valid_kebab_case("has.dot"));
         assert!(!is_valid_kebab_case("special!char"));
+    }
+
+    // ── is_reserved_node_name ───────────────────────────────────────────
+
+    #[test]
+    fn reserved_names() {
+        assert!(is_reserved_node_name("project"));
+        assert!(!is_reserved_node_name("my-project"));
+        assert!(!is_reserved_node_name("auth"));
+        assert!(!is_reserved_node_name(""));
     }
 
     // ── validate ─────────────────────────────────────────────────────────

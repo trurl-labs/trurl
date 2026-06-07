@@ -11,6 +11,11 @@ pub fn add_component(cwd: &Path, name: &str, description: Option<&str>) -> Resul
     if !store::is_valid_kebab_case(name) {
         return Err(Error::InvalidName(name.into()));
     }
+    if store::is_reserved_node_name(name) {
+        return Err(Error::Validation(format!(
+            "`{name}` is reserved and cannot be used as a component name"
+        )));
+    }
 
     let (store, lock, mut state) = open_store_mut(cwd)?;
 
@@ -89,6 +94,11 @@ pub fn add_connection(cwd: &Path, from: &str, to: &str) -> Result<()> {
 pub fn rename_component(cwd: &Path, old: &str, new: &str) -> Result<()> {
     if !store::is_valid_kebab_case(new) {
         return Err(Error::InvalidName(new.into()));
+    }
+    if store::is_reserved_node_name(new) {
+        return Err(Error::Validation(format!(
+            "`{new}` is reserved and cannot be used as a component name"
+        )));
     }
 
     let (store, lock, mut state) = open_store_mut(cwd)?;
@@ -288,6 +298,31 @@ mod tests {
         let err = add_component(tmp.path(), "auth", None).unwrap_err();
         match err {
             Error::Validation(msg) => assert!(msg.contains("already exists")),
+            other => panic!("expected Validation, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn add_component_rejects_reserved_name() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+
+        let err = add_component(tmp.path(), "project", None).unwrap_err();
+        match err {
+            Error::Validation(msg) => assert!(msg.contains("reserved"), "{msg}"),
+            other => panic!("expected Validation, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn rename_component_rejects_reserved_name() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
+
+        let err = rename_component(tmp.path(), "auth", "project").unwrap_err();
+        match err {
+            Error::Validation(msg) => assert!(msg.contains("reserved"), "{msg}"),
             other => panic!("expected Validation, got: {other}"),
         }
     }

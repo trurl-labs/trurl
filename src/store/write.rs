@@ -253,6 +253,20 @@ impl Store {
         removes: Vec<PathBuf>,
         state: &ProjectState,
     ) -> Result<()> {
+        // Pre-check: duplicate node names in the index would cause silent
+        // data loss during InMemoryGraph construction (HashMap overwrite).
+        {
+            let mut seen = std::collections::HashSet::with_capacity(state.graph_index.nodes.len());
+            for node in &state.graph_index.nodes {
+                if !seen.insert(&node.name) {
+                    return Err(Error::GraphIntegrity(format!(
+                        "duplicate node name `{}` in graph index",
+                        node.name
+                    )));
+                }
+            }
+        }
+
         let graph = state.build_graph();
         let issues = graph.validate();
         let errors: Vec<&str> = issues

@@ -100,6 +100,11 @@ pub(crate) fn unique_decision_stem(
     decisions: &std::collections::BTreeMap<String, DecisionFile>,
     base: &str,
 ) -> Result<String> {
+    if crate::store::is_reserved_node_name(base) {
+        // Disambiguate immediately — "project" is the virtual node.
+        let candidate = format!("{base}-decision");
+        return unique_decision_stem(decisions, &candidate);
+    }
     if !decisions.contains_key(base) {
         return Ok(base.to_string());
     }
@@ -190,6 +195,17 @@ mod tests {
         assert_eq!(
             unique_decision_stem(&decisions, "use-redis").unwrap(),
             "use-redis-4"
+        );
+    }
+
+    #[test]
+    fn unique_stem_disambiguates_reserved_name() {
+        let decisions = std::collections::BTreeMap::new();
+        let stem = unique_decision_stem(&decisions, "project").unwrap();
+        assert_ne!(stem, "project", "reserved name must be disambiguated");
+        assert!(
+            stem.starts_with("project-"),
+            "disambiguated stem should keep the prefix: {stem}"
         );
     }
 }
