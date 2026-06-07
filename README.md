@@ -15,6 +15,16 @@ AI coding tools write clean code line by line, but make inconsistent architectur
 
 The result: codebases that work but that nobody truly owns or understands.
 
+## The Problem
+
+AI engineering is real leverage - with a real cost.
+
+You're shipping faster than ever, but you've stopped making the decisions that define your architecture - the AI makes them for you, silently, differently each time, and you approve because each diff looks reasonable in isolation. The speed is real. So is the cost: you're losing ownership of your own codebase, trading deep understanding for throughput, and accumulating technical debt that no linter will ever catch.
+
+Six months in, you can't refactor without breaking things you didn't know existed. You can't onboard anyone because there's no design to explain — just a pile of locally-correct code with no global coherence. The system works. **You just don't own it**.
+
+Trurl fixes this. You make the architectural decisions. Trurl records them, forces you to understand them, and feeds them as hard constraints to every AI-generated line of code. One decision graph, every agent follows it, nothing slips through.
+
 ## What Trurl Does
 
 Every architectural decision is captured in a queryable graph, understood by the programmer through forced engagement, and used to constrain AI code generation.
