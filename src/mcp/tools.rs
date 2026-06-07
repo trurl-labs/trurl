@@ -3,6 +3,7 @@ use serde_json::Value;
 use crate::store::{ProjectState, Store};
 
 use super::context;
+use super::prompts;
 use super::write;
 
 // ── Tool definitions ────────────────────────────────────────────────────────
@@ -151,6 +152,61 @@ pub(crate) fn tool_list() -> Value {
                     },
                     "required": ["name"]
                 }
+            },
+            {
+                "name": "update_decision",
+                "description": "Modify an existing decision. 'amend' edits in place \
+                    (typo, clarification). 'supersede' creates a new decision replacing \
+                    the old one (substantive change).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Existing decision name."
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["amend", "supersede"],
+                            "description": "amend = edit in place; supersede = create replacement."
+                        },
+                        "choice": {
+                            "type": "string",
+                            "description": "New choice text (at least one of choice/reason required)."
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "New reason text."
+                        }
+                    },
+                    "required": ["name", "mode"]
+                }
+            },
+            {
+                "name": "get_design_prompt",
+                "description": "Get a structured prompt for running a design conversation. \
+                    Returns system instructions, component context, and comprehension gates \
+                    tailored to the mode.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "component": {
+                            "type": "string",
+                            "description": "Component name or 'project'."
+                        },
+                        "task": {
+                            "type": "string",
+                            "description": "Optional task context."
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["full", "quick", "learn", "review"],
+                            "description": "full = new component; quick = small addition; \
+                                learn = study existing; review = periodic health check."
+                        }
+                    },
+                    "required": ["component", "mode"]
+                }
             }
         ]
     })
@@ -183,6 +239,11 @@ pub(crate) fn call_tool(
             Ok(v) => tool_result(&v),
             Err(msg) => tool_error(&msg),
         },
+        "update_decision" => match write::update_decision(store, state, args) {
+            Ok(v) => tool_result(&v),
+            Err(msg) => tool_error(&msg),
+        },
+        "get_design_prompt" => dispatch_get_design_prompt(state, args),
         _ => tool_error(&format!("unknown tool: {name}")),
     }
 }
@@ -205,6 +266,27 @@ fn dispatch_check_pattern(state: &ProjectState, args: &Value) -> Value {
         None => return tool_error("missing required parameter: description"),
     };
     tool_result(&context::check_pattern(state, description))
+}
+
+fn dispatch_get_design_prompt(state: &ProjectState, args: &Value) -> Value {
+    let component = match args.get("component").and_then(|v| v.as_str()) {
+        Some(c) => c,
+        None => return tool_error("missing required parameter: component"),
+    };
+    let mode_str = match args.get("mode").and_then(|v| v.as_str()) {
+        Some(m) => m,
+        None => return tool_error("missing required parameter: mode"),
+    };
+    let mode = match prompts::DesignMode::parse(mode_str) {
+        Ok(m) => m,
+        Err(msg) => return tool_error(&msg),
+    };
+    let task = args.get("task").and_then(|v| v.as_str());
+
+    match prompts::build_design_prompt(state, component, task, mode) {
+        Ok(result) => tool_result(&result),
+        Err(msg) => tool_error(&msg),
+    }
 }
 
 pub(crate) fn tool_result(payload: &Value) -> Value {
@@ -242,6 +324,8 @@ mod tests {
         assert!(names.contains(&"record_decision"));
         assert!(names.contains(&"record_pattern"));
         assert!(names.contains(&"remove_decision"));
+        assert!(names.contains(&"update_decision"));
+        assert!(names.contains(&"get_design_prompt"));
     }
 
     #[test]
