@@ -49,7 +49,13 @@ pub(crate) async fn stream_sse(
             }
         };
 
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        // Fast path: SSE payloads from real API providers are always valid
+        // UTF-8. Avoid the Cow<str> allocation from from_utf8_lossy by
+        // attempting a zero-copy conversion first.
+        match std::str::from_utf8(&chunk) {
+            Ok(valid) => buffer.push_str(valid),
+            Err(_) => buffer.push_str(&String::from_utf8_lossy(&chunk)),
+        }
 
         if buffer.len() > MAX_SSE_BUFFER_BYTES {
             return Err(Error::Api {

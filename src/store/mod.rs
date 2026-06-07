@@ -504,42 +504,7 @@ pub(crate) mod testing {
     use chrono::{TimeZone, Utc};
 
     pub fn setup_store(dir: &Path) -> Store {
-        let root = dir.join(STORE_DIR);
-        fs::create_dir_all(root.join(COMPONENTS_DIR)).unwrap();
-        fs::create_dir_all(root.join(DECISIONS_DIR)).unwrap();
-        fs::create_dir_all(root.join(PATTERNS_DIR)).unwrap();
-        fs::create_dir_all(root.join(STATE_DIR)).unwrap();
-
-        let project = ProjectFile {
-            trurl_version: FORMAT_VERSION.into(),
-            project: Project {
-                name: "test-project".into(),
-                description: "A test project".into(),
-            },
-        };
-        let project_content = toml::to_string_pretty(&project).unwrap();
-        fs::write(root.join("project.toml"), &project_content).unwrap();
-
-        // Write initial graph.toml with the project virtual node.
-        let project_hash = hash_bytes(project_content.as_bytes());
-        let index = GraphIndex {
-            version: 1,
-            rebuilt: Utc::now(),
-            nodes: vec![NodeEntry {
-                name: "project".into(),
-                kind: NodeKind::Component,
-                tags: vec![],
-                hash: project_hash,
-            }],
-            edges: vec![],
-        };
-        fs::write(
-            root.join(GRAPH_FILE),
-            toml::to_string_pretty(&index).unwrap(),
-        )
-        .unwrap();
-
-        Store::at(root)
+        setup_store_with_version(dir, FORMAT_VERSION)
     }
 
     pub fn setup_store_with_version(dir: &Path, version: &str) -> Store {
