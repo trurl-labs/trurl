@@ -121,7 +121,7 @@ pub(crate) fn diff_states(old: &ProjectState, new: &ProjectState) -> Vec<WsEvent
         events.push(WsEvent::EdgeRemoved {
             from: from.to_string(),
             to: to.to_string(),
-            kind: format!("{kind:?}").to_ascii_lowercase(),
+            kind: kind.as_str().to_string(),
         });
     }
     for &(from, to, kind) in new_edges.difference(&old_edges) {
@@ -129,7 +129,7 @@ pub(crate) fn diff_states(old: &ProjectState, new: &ProjectState) -> Vec<WsEvent
             edge: EdgeSnapshot {
                 from: from.to_string(),
                 to: to.to_string(),
-                kind: format!("{kind:?}").to_ascii_lowercase(),
+                kind: kind.as_str().to_string(),
             },
         });
     }
@@ -149,18 +149,9 @@ pub(crate) fn diff_states(old: &ProjectState, new: &ProjectState) -> Vec<WsEvent
 fn snapshot_node(node: &NodeEntry) -> NodeSnapshot {
     NodeSnapshot {
         name: node.name.clone(),
-        kind: kind_str(node.kind),
+        kind: node.kind.as_str().to_string(),
         tags: node.tags.clone(),
     }
-}
-
-fn kind_str(kind: NodeKind) -> String {
-    match kind {
-        NodeKind::Component => "component",
-        NodeKind::Decision => "decision",
-        NodeKind::Pattern => "pattern",
-    }
-    .to_string()
 }
 
 /// Build a JSON object describing what changed in an updated node.
@@ -288,5 +279,60 @@ mod tests {
         let events = diff_states(&old, &new);
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], WsEvent::FullReload));
+    }
+
+    #[test]
+    fn edge_diff_kind_is_snake_case() {
+        let n = vec![
+            node("a", NodeKind::Component, "1"),
+            node("b", NodeKind::Component, "2"),
+        ];
+        let old = minimal_state(n.clone(), vec![]);
+        let new = minimal_state(
+            n,
+            vec![EdgeEntry {
+                from: "a".into(),
+                to: "b".into(),
+                kind: EdgeKind::ConnectsTo,
+            }],
+        );
+        let events = diff_states(&old, &new);
+        let edge_event = events
+            .iter()
+            .find_map(|e| match e {
+                WsEvent::EdgeAdded { edge } => Some(edge),
+                _ => None,
+            })
+            .expect("should have an EdgeAdded event");
+        assert_eq!(
+            edge_event.kind, "connects_to",
+            "edge kind must be snake_case, not Debug-formatted CamelCase"
+        );
+    }
+
+    #[test]
+    fn removed_edge_kind_is_snake_case() {
+        let n = vec![
+            node("a", NodeKind::Component, "1"),
+            node("b", NodeKind::Component, "2"),
+        ];
+        let old = minimal_state(
+            n.clone(),
+            vec![EdgeEntry {
+                from: "a".into(),
+                to: "b".into(),
+                kind: EdgeKind::DependsOn,
+            }],
+        );
+        let new = minimal_state(n, vec![]);
+        let events = diff_states(&old, &new);
+        let removed = events
+            .iter()
+            .find_map(|e| match e {
+                WsEvent::EdgeRemoved { kind, .. } => Some(kind.as_str()),
+                _ => None,
+            })
+            .expect("should have an EdgeRemoved event");
+        assert_eq!(removed, "depends_on");
     }
 }

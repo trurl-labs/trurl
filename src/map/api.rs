@@ -15,7 +15,7 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::store::schema::EdgeKind;
+use crate::store::schema::{EdgeKind, NodeKind};
 use crate::store::{self};
 
 use super::diff::WsEvent;
@@ -286,7 +286,7 @@ fn write_component(state: Arc<MapState>, body: CreateComponent) -> ApiResult {
         &[WsEvent::NodeAdded {
             node: super::diff::NodeSnapshot {
                 name: name.clone(),
-                kind: "component".into(),
+                kind: NodeKind::Component.as_str().into(),
                 tags: vec![],
             },
         }],
@@ -353,7 +353,7 @@ fn write_connection(state: Arc<MapState>, body: CreateConnection) -> ApiResult {
             edge: super::diff::EdgeSnapshot {
                 from: body.from,
                 to: body.to,
-                kind: "connects_to".into(),
+                kind: EdgeKind::ConnectsTo.as_str().into(),
             },
         }],
     );
@@ -595,7 +595,7 @@ fn remove_connection(state: Arc<MapState>, from: String, to: String) -> ApiResul
         &[WsEvent::EdgeRemoved {
             from,
             to,
-            kind: "connects_to".into(),
+            kind: EdgeKind::ConnectsTo.as_str().into(),
         }],
     );
     Ok(Json(json!({ "ok": true })))
@@ -604,13 +604,5 @@ fn remove_connection(state: Arc<MapState>, from: String, to: String) -> ApiResul
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 fn edge_kind_str(kind: EdgeKind) -> &'static str {
-    match kind {
-        EdgeKind::BelongsTo => "belongs_to",
-        EdgeKind::ConnectsTo => "connects_to",
-        EdgeKind::DependsOn => "depends_on",
-        EdgeKind::Constrains => "constrains",
-        EdgeKind::Supersedes => "supersedes",
-        EdgeKind::MemberOf => "member_of",
-        EdgeKind::AppliesTo => "applies_to",
-    }
+    kind.as_str()
 }

@@ -84,6 +84,18 @@ pub enum NodeKind {
     Pattern,
 }
 
+impl NodeKind {
+    /// Canonical snake_case string, matching serde serialization.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Component => "component",
+            Self::Decision => "decision",
+            Self::Pattern => "pattern",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeKind {
@@ -94,6 +106,27 @@ pub enum EdgeKind {
     Supersedes,
     MemberOf,
     AppliesTo,
+}
+
+impl EdgeKind {
+    /// Canonical snake_case string, matching serde serialization.
+    ///
+    /// Use this for JSON payloads, WebSocket events, and any
+    /// user-facing output — never `Debug` formatting, which
+    /// produces CamelCase (`ConnectsTo`) instead of snake_case
+    /// (`connects_to`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BelongsTo => "belongs_to",
+            Self::ConnectsTo => "connects_to",
+            Self::DependsOn => "depends_on",
+            Self::Constrains => "constrains",
+            Self::Supersedes => "supersedes",
+            Self::MemberOf => "member_of",
+            Self::AppliesTo => "applies_to",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -411,5 +444,52 @@ reason = "Stateless"
 "#;
         let result = toml::from_str::<DecisionFile>(toml_str);
         assert!(result.is_err(), "missing created field must be rejected");
+    }
+
+    // ── as_str ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn edge_kind_as_str_matches_serde() {
+        for kind in [
+            EdgeKind::BelongsTo,
+            EdgeKind::ConnectsTo,
+            EdgeKind::DependsOn,
+            EdgeKind::Constrains,
+            EdgeKind::Supersedes,
+            EdgeKind::MemberOf,
+            EdgeKind::AppliesTo,
+        ] {
+            let edge = EdgeEntry {
+                from: "a".into(),
+                to: "b".into(),
+                kind,
+            };
+            let serialized = toml::to_string_pretty(&edge).expect("serialize");
+            let expected = format!("kind = \"{}\"", kind.as_str());
+            assert!(
+                serialized.contains(&expected),
+                "{kind:?}.as_str() = {:?} must match serde output, got:\n{serialized}",
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn node_kind_as_str_matches_serde() {
+        for kind in [NodeKind::Component, NodeKind::Decision, NodeKind::Pattern] {
+            let node = NodeEntry {
+                name: "x".into(),
+                kind,
+                tags: vec![],
+                hash: "h".into(),
+            };
+            let serialized = toml::to_string_pretty(&node).expect("serialize");
+            let expected = format!("kind = \"{}\"", kind.as_str());
+            assert!(
+                serialized.contains(&expected),
+                "{kind:?}.as_str() = {:?} must match serde output, got:\n{serialized}",
+                kind.as_str()
+            );
+        }
     }
 }
