@@ -12,17 +12,13 @@ pub fn add_component(cwd: &Path, name: &str, description: Option<&str>) -> Resul
         return Err(Error::InvalidName(name.into()));
     }
     if store::is_reserved_node_name(name) {
-        return Err(Error::Validation(format!(
-            "`{name}` is reserved and cannot be used as a component name"
-        )));
+        return Err(Error::ReservedName(name.into()));
     }
 
     let (store, lock, mut state) = open_store_mut(cwd)?;
 
     if state.components.contains_key(name) {
-        return Err(Error::Validation(format!(
-            "component `{name}` already exists"
-        )));
+        return Err(Error::ComponentExists(name.into()));
     }
 
     let comp = ComponentFile {
@@ -53,19 +49,13 @@ pub fn add_connection(cwd: &Path, from: &str, to: &str) -> Result<()> {
     let (store, lock, mut state) = open_store_mut(cwd)?;
 
     if !state.components.contains_key(from) {
-        return Err(Error::Validation(format!(
-            "component `{from}` does not exist"
-        )));
+        return Err(Error::ComponentNotFound(from.into()));
     }
     if !state.components.contains_key(to) {
-        return Err(Error::Validation(format!(
-            "component `{to}` does not exist"
-        )));
+        return Err(Error::ComponentNotFound(to.into()));
     }
     if from == to {
-        return Err(Error::Validation(format!(
-            "component `{from}` cannot connect to itself"
-        )));
+        return Err(Error::SelfConnection(from.into()));
     }
 
     let duplicate = state
@@ -74,9 +64,10 @@ pub fn add_connection(cwd: &Path, from: &str, to: &str) -> Result<()> {
         .iter()
         .any(|e| e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo);
     if duplicate {
-        return Err(Error::Validation(format!(
-            "connection `{from}` → `{to}` already exists"
-        )));
+        return Err(Error::DuplicateConnection {
+            from: from.into(),
+            to: to.into(),
+        });
     }
 
     state.graph_index.edges.push(EdgeEntry {
@@ -96,22 +87,16 @@ pub fn rename_component(cwd: &Path, old: &str, new: &str) -> Result<()> {
         return Err(Error::InvalidName(new.into()));
     }
     if store::is_reserved_node_name(new) {
-        return Err(Error::Validation(format!(
-            "`{new}` is reserved and cannot be used as a component name"
-        )));
+        return Err(Error::ReservedName(new.into()));
     }
 
     let (store, lock, mut state) = open_store_mut(cwd)?;
 
     if !state.components.contains_key(old) {
-        return Err(Error::Validation(format!(
-            "component `{old}` does not exist"
-        )));
+        return Err(Error::ComponentNotFound(old.into()));
     }
     if state.components.contains_key(new) {
-        return Err(Error::Validation(format!(
-            "component `{new}` already exists"
-        )));
+        return Err(Error::ComponentExists(new.into()));
     }
 
     let affected_decisions: Vec<String> = state
@@ -125,7 +110,7 @@ pub fn rename_component(cwd: &Path, old: &str, new: &str) -> Result<()> {
     let mut renamed = state
         .components
         .remove(old)
-        .ok_or_else(|| Error::Validation(format!("component `{old}` does not exist")))?;
+        .ok_or_else(|| Error::ComponentNotFound(old.into()))?;
     renamed.component.name = new.into();
     state.components.insert(new.into(), renamed);
 
@@ -187,9 +172,7 @@ pub fn remove_component(cwd: &Path, name: &str) -> Result<()> {
     let (store, lock, mut state) = open_store_mut(cwd)?;
 
     if !state.components.contains_key(name) {
-        return Err(Error::Validation(format!(
-            "component `{name}` does not exist"
-        )));
+        return Err(Error::ComponentNotFound(name.into()));
     }
 
     // Build graph for cascade analysis.
@@ -296,10 +279,7 @@ mod tests {
         add_component(tmp.path(), "auth", None).unwrap();
 
         let err = add_component(tmp.path(), "auth", None).unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(msg.contains("already exists")),
-            other => panic!("expected Validation, got: {other}"),
-        }
+        assert!(matches!(err, Error::ComponentExists(ref n) if n == "auth"));
     }
 
     #[test]
@@ -308,10 +288,7 @@ mod tests {
         init(tmp.path()).unwrap();
 
         let err = add_component(tmp.path(), "project", None).unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(msg.contains("reserved"), "{msg}"),
-            other => panic!("expected Validation, got: {other}"),
-        }
+        assert!(matches!(err, Error::ReservedName(ref n) if n == "project"));
     }
 
     #[test]
@@ -321,10 +298,7 @@ mod tests {
         add_component(tmp.path(), "auth", None).unwrap();
 
         let err = rename_component(tmp.path(), "auth", "project").unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(msg.contains("reserved"), "{msg}"),
-            other => panic!("expected Validation, got: {other}"),
-        }
+        assert!(matches!(err, Error::ReservedName(ref n) if n == "project"));
     }
 
     #[test]
@@ -402,10 +376,7 @@ mod tests {
         add_component(tmp.path(), "auth", None).unwrap();
 
         let err = add_connection(tmp.path(), "ghost", "auth").unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(msg.contains("ghost")),
-            other => panic!("expected Validation, got: {other}"),
-        }
+        assert!(matches!(err, Error::ComponentNotFound(ref n) if n == "ghost"));
     }
 
     #[test]
@@ -415,10 +386,7 @@ mod tests {
         add_component(tmp.path(), "auth", None).unwrap();
 
         let err = add_connection(tmp.path(), "auth", "ghost").unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(msg.contains("ghost")),
-            other => panic!("expected Validation, got: {other}"),
-        }
+        assert!(matches!(err, Error::ComponentNotFound(ref n) if n == "ghost"));
     }
 
     #[test]
@@ -428,10 +396,7 @@ mod tests {
         add_component(tmp.path(), "auth", None).unwrap();
 
         let err = add_connection(tmp.path(), "auth", "auth").unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(msg.contains("cannot connect to itself")),
-            other => panic!("expected Validation, got: {other}"),
-        }
+        assert!(matches!(err, Error::SelfConnection(ref n) if n == "auth"));
     }
 
     #[test]
@@ -443,10 +408,7 @@ mod tests {
         add_connection(tmp.path(), "auth", "database").unwrap();
 
         let err = add_connection(tmp.path(), "auth", "database").unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(msg.contains("already exists")),
-            other => panic!("expected Validation, got: {other}"),
-        }
+        assert!(matches!(err, Error::DuplicateConnection { .. }));
     }
 
     // ── rename component ─────────────────────────────────────────────────
@@ -471,10 +433,7 @@ mod tests {
         init(tmp.path()).unwrap();
 
         let err = rename_component(tmp.path(), "ghost", "new").unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(msg.contains("ghost")),
-            other => panic!("expected Validation, got: {other}"),
-        }
+        assert!(matches!(err, Error::ComponentNotFound(ref n) if n == "ghost"));
     }
 
     #[test]
@@ -485,10 +444,7 @@ mod tests {
         add_component(tmp.path(), "auth2", None).unwrap();
 
         let err = rename_component(tmp.path(), "auth", "auth2").unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(msg.contains("already exists")),
-            other => panic!("expected Validation, got: {other}"),
-        }
+        assert!(matches!(err, Error::ComponentExists(ref n) if n == "auth2"));
     }
 
     #[test]
@@ -581,10 +537,7 @@ mod tests {
         init(tmp.path()).unwrap();
 
         let err = remove_component(tmp.path(), "ghost").unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(msg.contains("ghost")),
-            other => panic!("expected Validation, got: {other}"),
-        }
+        assert!(matches!(err, Error::ComponentNotFound(ref n) if n == "ghost"));
     }
 
     #[test]

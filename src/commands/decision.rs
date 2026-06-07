@@ -22,17 +22,13 @@ pub fn decide(
     let (store, lock, mut state) = open_store_mut(cwd)?;
 
     if component != "project" && !state.components.contains_key(component) {
-        return Err(Error::Validation(format!(
-            "component `{component}` does not exist"
-        )));
+        return Err(Error::ComponentNotFound(component.into()));
     }
 
     if let Some(sup) = supersedes
         && !state.decisions.contains_key(sup)
     {
-        return Err(Error::Validation(format!(
-            "decision `{sup}` does not exist (cannot supersede)"
-        )));
+        return Err(Error::DecisionNotFound(sup.into()));
     }
 
     let stem = store.record_decision(
@@ -58,9 +54,7 @@ pub fn remove_decision(cwd: &Path, name: &str) -> Result<()> {
     let (store, lock, mut state) = open_store_mut(cwd)?;
 
     if !state.decisions.contains_key(name) {
-        return Err(Error::Validation(format!(
-            "decision `{name}` does not exist"
-        )));
+        return Err(Error::DecisionNotFound(name.into()));
     }
 
     // Build graph for cascade analysis.
@@ -189,10 +183,7 @@ mod tests {
         init(tmp.path()).unwrap();
 
         let err = decide(tmp.path(), "ghost", "x", "y", None, &[]).unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(msg.contains("ghost")),
-            other => panic!("expected Validation, got: {other}"),
-        }
+        assert!(matches!(err, Error::ComponentNotFound(ref n) if n == "ghost"));
     }
 
     #[test]
@@ -202,10 +193,7 @@ mod tests {
         add_component(tmp.path(), "auth", None).unwrap();
 
         let err = decide(tmp.path(), "auth", "x", "y", Some("ghost"), &[]).unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(msg.contains("ghost")),
-            other => panic!("expected Validation, got: {other}"),
-        }
+        assert!(matches!(err, Error::DecisionNotFound(ref n) if n == "ghost"));
     }
 
     #[test]
@@ -378,10 +366,7 @@ mod tests {
         init(tmp.path()).unwrap();
 
         let err = remove_decision(tmp.path(), "ghost").unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(msg.contains("ghost")),
-            other => panic!("expected Validation, got: {other}"),
-        }
+        assert!(matches!(err, Error::DecisionNotFound(ref n) if n == "ghost"));
     }
 
     #[test]

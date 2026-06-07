@@ -228,9 +228,9 @@ impl Store {
         let path = self.component_path(name);
         match self.read_toml(&path) {
             Ok(file) => Ok(file),
-            Err(Error::Io(e)) if e.kind() == ErrorKind::NotFound => Err(Error::Validation(
-                format!("component `{name}` does not exist"),
-            )),
+            Err(Error::Io(e)) if e.kind() == ErrorKind::NotFound => {
+                Err(Error::ComponentNotFound(name.into()))
+            }
             Err(e) => Err(e),
         }
     }
@@ -240,9 +240,9 @@ impl Store {
         let path = self.decision_path(name);
         match self.read_toml(&path) {
             Ok(file) => Ok(file),
-            Err(Error::Io(e)) if e.kind() == ErrorKind::NotFound => Err(Error::Validation(
-                format!("decision `{name}` does not exist"),
-            )),
+            Err(Error::Io(e)) if e.kind() == ErrorKind::NotFound => {
+                Err(Error::DecisionNotFound(name.into()))
+            }
             Err(e) => Err(e),
         }
     }
@@ -670,10 +670,7 @@ mod tests {
         let store = setup_store(tmp.path());
 
         let err = store.read_component("nonexistent").unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(msg.contains("nonexistent")),
-            other => panic!("expected Validation error, got: {other}"),
-        }
+        assert!(matches!(err, Error::ComponentNotFound(ref n) if n == "nonexistent"));
     }
 
     #[test]
@@ -682,10 +679,7 @@ mod tests {
         let store = setup_store(tmp.path());
 
         let err = store.read_decision("nonexistent").unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(msg.contains("nonexistent")),
-            other => panic!("expected Validation, got: {other}"),
-        }
+        assert!(matches!(err, Error::DecisionNotFound(ref n) if n == "nonexistent"));
     }
 
     // ── list / load_state ────────────────────────────────────────────────

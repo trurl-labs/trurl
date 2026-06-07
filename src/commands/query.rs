@@ -61,7 +61,7 @@ pub fn check(cwd: &Path, rebuild: bool) -> Result<()> {
     }
 
     if error_count > 0 {
-        Err(Error::Validation(format!("{error_count} error(s) found")))
+        Err(Error::CheckFailed(error_count))
     } else {
         Ok(())
     }
@@ -111,9 +111,7 @@ fn check_rebuild(cwd: &Path) -> Result<()> {
             eprintln!("  {prefix}: {}", issue.message);
         }
         if error_count > 0 {
-            Err(Error::Validation(format!(
-                "{error_count} error(s) found after rebuild"
-            )))
+            Err(Error::CheckFailed(error_count))
         } else {
             Ok(())
         }

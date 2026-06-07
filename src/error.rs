@@ -28,6 +28,27 @@ pub enum Error {
     )]
     InvalidName(String),
 
+    #[error("component `{0}` does not exist")]
+    ComponentNotFound(String),
+
+    #[error("component `{0}` already exists")]
+    ComponentExists(String),
+
+    #[error("decision `{0}` does not exist")]
+    DecisionNotFound(String),
+
+    #[error("`{0}` is reserved and cannot be used as a node name")]
+    ReservedName(String),
+
+    #[error("component `{0}` cannot connect to itself")]
+    SelfConnection(String),
+
+    #[error("connection `{from}` \u{2192} `{to}` already exists")]
+    DuplicateConnection { from: String, to: String },
+
+    #[error("{0} consistency error(s) found")]
+    CheckFailed(usize),
+
     #[error("{0}")]
     Validation(String),
 

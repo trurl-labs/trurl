@@ -25,9 +25,7 @@ pub fn design(
     if component != "project" {
         let names = store.list_components()?;
         if !names.iter().any(|n| n == component) {
-            return Err(Error::Validation(format!(
-                "component `{component}` does not exist"
-            )));
+            return Err(Error::ComponentNotFound(component.into()));
         }
     }
 
@@ -39,7 +37,8 @@ pub fn design(
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
-        .build()?;
+        .build()
+        .map_err(|e| Error::Io(std::io::Error::other(e)))?;
 
     rt.block_on(crate::conversation::run_design(
         &store,
@@ -74,12 +73,6 @@ mod tests {
         init(tmp.path()).unwrap();
 
         let err = design(tmp.path(), "ghost", false, false, None, None).unwrap_err();
-        match err {
-            Error::Validation(msg) => assert!(
-                msg.contains("ghost") && msg.contains("does not exist"),
-                "expected missing-component error, got: {msg}"
-            ),
-            other => panic!("expected Validation, got: {other}"),
-        }
+        assert!(matches!(err, Error::ComponentNotFound(ref n) if n == "ghost"));
     }
 }

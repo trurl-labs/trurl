@@ -49,9 +49,7 @@ pub async fn run_design(
     }
 
     if component != "project" && !state.components.contains_key(component) {
-        return Err(Error::Validation(format!(
-            "component `{component}` does not exist"
-        )));
+        return Err(Error::ComponentNotFound(component.into()));
     }
     let system = prompt::build_system_prompt(component, &state, revisit);
 
