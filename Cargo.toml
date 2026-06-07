@@ -42,8 +42,23 @@ notify = "6"
 # HTTP client for LLM API calls (rustls = pure-Rust TLS, no OpenSSL dep)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
-# Async runtime (current-thread for design conversations + SSE streaming)
-tokio = { version = "1", features = ["rt", "time"] }
+# Async runtime
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "macros", "net", "signal", "sync"] }
+
+# HTTP server for map (WebSocket via `ws` feature)
+axum = { version = "0.7", features = ["ws"] }
+
+# HTTP middleware: security headers
+tower-http = { version = "0.5", features = ["set-header"] }
+
+# Embed frontend assets in binary (map)
+rust-embed = "8"
+
+# Cross-platform browser launch (map)
+opener = "0.7"
+
+# Cryptographic random token generation (map)
+rand = "0.8"
 
 # Security: zero API keys from memory on drop
 zeroize = { version = "1", features = ["derive"] }

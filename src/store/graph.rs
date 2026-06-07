@@ -232,6 +232,25 @@ impl InMemoryGraph {
         })
     }
 
+    /// Decisions that are members of a pattern (forward `MemberOf` edges).
+    pub fn decisions_for_pattern(&self, pattern: &str) -> Vec<(&Arc<str>, &DecisionFile)> {
+        self.forward
+            .get(pattern)
+            .map(|edges| {
+                edges
+                    .iter()
+                    .filter(|e| e.kind == EdgeKind::MemberOf)
+                    .filter_map(|e| self.decisions.get(&e.target).map(|d| (&e.target, d)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Components that a pattern applies to (forward `AppliesTo` edges).
+    pub fn components_for_pattern(&self, pattern: &str) -> Vec<&str> {
+        self.forward_targets(pattern, EdgeKind::AppliesTo)
+    }
+
     /// Count forward edges of a specific kind from a node.
     pub fn forward_edge_count(&self, node: &str, kind: EdgeKind) -> usize {
         self.forward

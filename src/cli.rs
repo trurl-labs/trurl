@@ -82,6 +82,17 @@ pub enum Command {
     /// Start the MCP server for AI coding agent integration.
     Serve,
 
+    /// Open the interactive map in the browser.
+    Map {
+        /// Bind to a specific port (default: OS-assigned).
+        #[arg(long)]
+        port: Option<u16>,
+
+        /// Start the server without opening the browser.
+        #[arg(long)]
+        no_open: bool,
+    },
+
     /// Show project status: component count, decision count, issues.
     Status,
 
@@ -189,6 +200,7 @@ pub fn run(cli: Cli) -> Result<()> {
             &alternatives,
         ),
         Command::Serve => commands::serve(&cwd),
+        Command::Map { port, no_open } => commands::map(&cwd, port, no_open),
         Command::Status => commands::status(&cwd),
         Command::Check { rebuild } => commands::check(&cwd, rebuild),
     }
