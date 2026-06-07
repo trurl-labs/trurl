@@ -383,7 +383,9 @@ impl Store {
             });
         }
 
-        // Preserve edges from existing graph that reference valid nodes.
+        // Preserve non-BelongsTo edges from existing graph that reference valid nodes.
+        // BelongsTo edges are always re-derived from decision files (source of truth).
+        // This prevents stale BelongsTo edges when decision.component is edited on disk.
         let valid_names: std::collections::HashSet<&str> =
             nodes.iter().map(|n| n.name.as_str()).collect();
 
@@ -391,19 +393,20 @@ impl Store {
             .edges
             .into_iter()
             .filter(|e| {
-                valid_names.contains(e.from.as_str()) && valid_names.contains(e.to.as_str())
+                e.kind != EdgeKind::BelongsTo
+                    && valid_names.contains(e.from.as_str())
+                    && valid_names.contains(e.to.as_str())
             })
             .collect();
 
-        // Ensure BelongsTo edges exist for all decisions.
+        // Re-derive BelongsTo edges from decision files.
+        // Skip if the target component doesn't exist — validation will report it.
         for (name, dec) in decisions {
-            let has_belongs_to = edges
-                .iter()
-                .any(|e| e.from == *name && e.kind == EdgeKind::BelongsTo);
-            if !has_belongs_to {
+            let target = &dec.decision.component;
+            if valid_names.contains(target.as_str()) {
                 edges.push(EdgeEntry {
                     from: name.clone(),
-                    to: dec.decision.component.clone(),
+                    to: target.clone(),
                     kind: EdgeKind::BelongsTo,
                 });
             }
@@ -777,6 +780,115 @@ mod tests {
         // Should still build a graph index from files
         assert!(state.graph_index.nodes.iter().any(|n| n.name == "project"));
         assert!(state.graph_index.nodes.iter().any(|n| n.name == "auth"));
+    }
+
+    #[test]
+    fn load_state_corrects_stale_belongs_to_edge() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store(tmp.path());
+        let lock = store.lock().unwrap();
+
+        let auth = sample_component("auth");
+        store
+            .write_atomic(&lock, &store.component_path("auth"), &auth)
+            .unwrap();
+        let db = sample_component("database");
+        store
+            .write_atomic(&lock, &store.component_path("database"), &db)
+            .unwrap();
+
+        // Decision belongs to "auth" per its file content.
+        let dec = sample_decision("token-format", "auth");
+        store
+            .write_atomic(&lock, &store.decision_path("token-format"), &dec)
+            .unwrap();
+
+        // Write graph.toml with a STALE BelongsTo edge pointing to "database".
+        let auth_hash = hash_file(&store.component_path("auth")).unwrap();
+        let db_hash = hash_file(&store.component_path("database")).unwrap();
+        let dec_hash = hash_file(&store.decision_path("token-format")).unwrap();
+        let project_hash = hash_file(&store.root().join("project.toml")).unwrap();
+
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: Utc::now(),
+            nodes: vec![
+                NodeEntry {
+                    name: "project".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: project_hash,
+                },
+                NodeEntry {
+                    name: "auth".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: auth_hash,
+                },
+                NodeEntry {
+                    name: "database".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: db_hash,
+                },
+                NodeEntry {
+                    name: "token-format".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: dec_hash,
+                },
+            ],
+            edges: vec![EdgeEntry {
+                from: "token-format".into(),
+                to: "database".into(),
+                kind: EdgeKind::BelongsTo,
+            }],
+        };
+        fs::write(store.graph_path(), toml::to_string_pretty(&index).unwrap()).unwrap();
+
+        let state = store.load_state().unwrap();
+        // BelongsTo must now point to "auth" (from decision file), not "database".
+        assert!(
+            state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.from == "token-format"
+                    && e.to == "auth"
+                    && e.kind == EdgeKind::BelongsTo)
+        );
+        assert!(
+            !state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.from == "token-format"
+                    && e.to == "database"
+                    && e.kind == EdgeKind::BelongsTo)
+        );
+    }
+
+    #[test]
+    fn load_state_skips_dangling_belongs_to() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store(tmp.path());
+        let lock = store.lock().unwrap();
+
+        // Decision references a component that does not exist on disk.
+        let dec = sample_decision("orphan-dec", "deleted-component");
+        store
+            .write_atomic(&lock, &store.decision_path("orphan-dec"), &dec)
+            .unwrap();
+
+        let state = store.load_state().unwrap();
+        // No BelongsTo edge should reference the missing component.
+        assert!(
+            !state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.to == "deleted-component")
+        );
     }
 
     // ── check_version ────────────────────────────────────────────────────

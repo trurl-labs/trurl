@@ -295,6 +295,7 @@ impl InMemoryGraph {
         self.check_duplicate_edges(&mut issues);
         self.check_pattern_membership(&mut issues);
         self.check_depends_on_cycles(&mut issues);
+        self.check_belongs_to_integrity(&mut issues);
         self.check_content_integrity(&mut issues);
         self.check_name_integrity(&mut issues);
         issues
@@ -588,12 +589,73 @@ impl InMemoryGraph {
             }
         }
         for (name, pat) in &self.patterns {
+            if pat.pattern.name.trim().is_empty() {
+                issues.push(Issue {
+                    severity: Severity::Error,
+                    message: format!("pattern `{name}` has empty name"),
+                    node: Some(name.to_string()),
+                });
+            }
             if pat.pattern.description.trim().is_empty() {
                 issues.push(Issue {
                     severity: Severity::Warning,
                     message: format!("pattern `{name}` has empty description"),
                     node: Some(name.to_string()),
                 });
+            }
+        }
+    }
+
+    /// Every Decision node has exactly one BelongsTo edge whose target matches
+    /// the `decision.component` field in the node file.
+    fn check_belongs_to_integrity(&self, issues: &mut Vec<Issue>) {
+        for (name, meta) in &self.nodes {
+            if meta.kind != NodeKind::Decision {
+                continue;
+            }
+            let belongs_to: Vec<&Edge> = self
+                .forward
+                .get(name)
+                .map(|edges| {
+                    edges
+                        .iter()
+                        .filter(|e| e.kind == EdgeKind::BelongsTo)
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            if belongs_to.is_empty() {
+                issues.push(Issue {
+                    severity: Severity::Error,
+                    message: format!("decision `{name}` has no BelongsTo edge"),
+                    node: Some(name.to_string()),
+                });
+            } else if belongs_to.len() > 1 {
+                issues.push(Issue {
+                    severity: Severity::Error,
+                    message: format!(
+                        "decision `{name}` has {} BelongsTo edges (must be exactly 1)",
+                        belongs_to.len()
+                    ),
+                    node: Some(name.to_string()),
+                });
+            }
+
+            // Verify BelongsTo target matches the decision file's component field.
+            if let Some(dec) = self.decisions.get(name) {
+                for edge in &belongs_to {
+                    if edge.target.as_ref() != dec.decision.component {
+                        issues.push(Issue {
+                            severity: Severity::Error,
+                            message: format!(
+                                "decision `{name}` BelongsTo target `{}` does not match \
+                                 decision.component `{}`",
+                                edge.target, dec.decision.component
+                            ),
+                            node: Some(name.to_string()),
+                        });
+                    }
+                }
             }
         }
     }
@@ -621,18 +683,9 @@ impl InMemoryGraph {
                 });
             }
         }
-        for (key, pat) in &self.patterns {
-            if key.as_ref() != pat.pattern.name {
-                issues.push(Issue {
-                    severity: Severity::Warning,
-                    message: format!(
-                        "pattern key `{key}` does not match internal name `{}`",
-                        pat.pattern.name
-                    ),
-                    node: Some(key.to_string()),
-                });
-            }
-        }
+        // Pattern names are human-readable (e.g. "All persistent state uses Redis")
+        // and intentionally differ from the kebab-case filename key. No key-vs-name
+        // check — only content checks (empty name/description) apply.
     }
 }
 
@@ -1756,5 +1809,327 @@ mod tests {
             assert_eq!(a.to, b.to);
             assert_eq!(a.kind, b.kind);
         }
+    }
+
+    // ── validate: BelongsTo integrity ────────────────────────────────────
+
+    #[test]
+    fn validate_catches_missing_belongs_to() {
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: ts(),
+            nodes: vec![
+                NodeEntry {
+                    name: "comp".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "1".into(),
+                },
+                NodeEntry {
+                    name: "dec".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: "2".into(),
+                },
+            ],
+            edges: vec![], // no BelongsTo edge
+        };
+        let mut decisions = HashMap::new();
+        decisions.insert(
+            "dec".into(),
+            DecisionFile {
+                decision: Decision {
+                    component: "comp".into(),
+                    choice: "test".into(),
+                    reason: "test".into(),
+                    alternatives: vec![],
+                    created: ts(),
+                },
+            },
+        );
+        let mut components = HashMap::new();
+        components.insert(
+            "comp".into(),
+            ComponentFile {
+                component: Component {
+                    name: "comp".into(),
+                    description: String::new(),
+                },
+            },
+        );
+        let g = InMemoryGraph::build(&index, components, decisions, HashMap::new());
+        let issues = g.validate();
+        assert!(issues.iter().any(|i| i.message.contains("no BelongsTo")));
+    }
+
+    #[test]
+    fn validate_catches_duplicate_belongs_to() {
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: ts(),
+            nodes: vec![
+                NodeEntry {
+                    name: "comp-a".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "1".into(),
+                },
+                NodeEntry {
+                    name: "comp-b".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "2".into(),
+                },
+                NodeEntry {
+                    name: "dec".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: "3".into(),
+                },
+            ],
+            edges: vec![
+                EdgeEntry {
+                    from: "dec".into(),
+                    to: "comp-a".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+                EdgeEntry {
+                    from: "dec".into(),
+                    to: "comp-b".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+            ],
+        };
+        let mut decisions = HashMap::new();
+        decisions.insert(
+            "dec".into(),
+            DecisionFile {
+                decision: Decision {
+                    component: "comp-a".into(),
+                    choice: "test".into(),
+                    reason: "test".into(),
+                    alternatives: vec![],
+                    created: ts(),
+                },
+            },
+        );
+        let mut components = HashMap::new();
+        components.insert(
+            "comp-a".into(),
+            ComponentFile {
+                component: Component {
+                    name: "comp-a".into(),
+                    description: String::new(),
+                },
+            },
+        );
+        components.insert(
+            "comp-b".into(),
+            ComponentFile {
+                component: Component {
+                    name: "comp-b".into(),
+                    description: String::new(),
+                },
+            },
+        );
+        let g = InMemoryGraph::build(&index, components, decisions, HashMap::new());
+        let issues = g.validate();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("2 BelongsTo edges"))
+        );
+    }
+
+    #[test]
+    fn validate_catches_belongs_to_target_mismatch() {
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: ts(),
+            nodes: vec![
+                NodeEntry {
+                    name: "comp-a".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "1".into(),
+                },
+                NodeEntry {
+                    name: "comp-b".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "2".into(),
+                },
+                NodeEntry {
+                    name: "dec".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: "3".into(),
+                },
+            ],
+            edges: vec![EdgeEntry {
+                from: "dec".into(),
+                to: "comp-a".into(),
+                kind: EdgeKind::BelongsTo,
+            }],
+        };
+        let mut decisions = HashMap::new();
+        decisions.insert(
+            "dec".into(),
+            DecisionFile {
+                decision: Decision {
+                    component: "comp-b".into(), // does NOT match the edge target
+                    choice: "test".into(),
+                    reason: "test".into(),
+                    alternatives: vec![],
+                    created: ts(),
+                },
+            },
+        );
+        let mut components = HashMap::new();
+        components.insert(
+            "comp-a".into(),
+            ComponentFile {
+                component: Component {
+                    name: "comp-a".into(),
+                    description: String::new(),
+                },
+            },
+        );
+        components.insert(
+            "comp-b".into(),
+            ComponentFile {
+                component: Component {
+                    name: "comp-b".into(),
+                    description: String::new(),
+                },
+            },
+        );
+        let g = InMemoryGraph::build(&index, components, decisions, HashMap::new());
+        let issues = g.validate();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("comp-a") && i.message.contains("comp-b"))
+        );
+    }
+
+    // ── validate: pattern content ────────────────────────────────────────
+
+    #[test]
+    fn validate_catches_empty_pattern_name() {
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: ts(),
+            nodes: vec![NodeEntry {
+                name: "pat".into(),
+                kind: NodeKind::Pattern,
+                tags: vec![],
+                hash: "1".into(),
+            }],
+            edges: vec![],
+        };
+        let mut patterns = HashMap::new();
+        patterns.insert(
+            "pat".into(),
+            PatternFile {
+                pattern: Pattern {
+                    name: String::new(),
+                    description: "something".into(),
+                },
+            },
+        );
+        let g = InMemoryGraph::build(&index, HashMap::new(), HashMap::new(), patterns);
+        let issues = g.validate();
+        assert!(issues.iter().any(|i| i.message.contains("empty name")));
+    }
+
+    #[test]
+    fn validate_allows_pattern_name_different_from_key() {
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: ts(),
+            nodes: vec![
+                NodeEntry {
+                    name: "project".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "p".into(),
+                },
+                NodeEntry {
+                    name: "d1".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: "1".into(),
+                },
+                NodeEntry {
+                    name: "d2".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: "2".into(),
+                },
+                NodeEntry {
+                    name: "state-in-redis".into(),
+                    kind: NodeKind::Pattern,
+                    tags: vec![],
+                    hash: "3".into(),
+                },
+            ],
+            edges: vec![
+                EdgeEntry {
+                    from: "d1".into(),
+                    to: "project".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+                EdgeEntry {
+                    from: "d2".into(),
+                    to: "project".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+                EdgeEntry {
+                    from: "state-in-redis".into(),
+                    to: "d1".into(),
+                    kind: EdgeKind::MemberOf,
+                },
+                EdgeEntry {
+                    from: "state-in-redis".into(),
+                    to: "d2".into(),
+                    kind: EdgeKind::MemberOf,
+                },
+            ],
+        };
+        let mut decisions = HashMap::new();
+        for n in ["d1", "d2"] {
+            decisions.insert(
+                n.into(),
+                DecisionFile {
+                    decision: Decision {
+                        component: "project".into(),
+                        choice: n.into(),
+                        reason: n.into(),
+                        alternatives: vec![],
+                        created: ts(),
+                    },
+                },
+            );
+        }
+        let mut patterns = HashMap::new();
+        patterns.insert(
+            "state-in-redis".into(),
+            PatternFile {
+                pattern: Pattern {
+                    // Human-readable name, intentionally different from the key.
+                    name: "All persistent state uses Redis".into(),
+                    description: "Shared Redis pool via app state".into(),
+                },
+            },
+        );
+        let g = InMemoryGraph::build(&index, HashMap::new(), decisions, patterns);
+        let issues = g.validate();
+        // Must NOT produce any warnings or errors about name mismatch.
+        assert!(
+            issues.is_empty(),
+            "expected no issues, got: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
     }
 }
