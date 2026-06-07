@@ -13,6 +13,8 @@ pub fn status(cwd: &Path) -> Result<()> {
         .filter(|d| d.decision.component == "project")
         .count();
 
+    let edge_count = state.graph_index.edges.len();
+
     println!("project: {}", state.project.project.name);
     println!("components: {}", state.components.len());
     println!(
@@ -20,6 +22,7 @@ pub fn status(cwd: &Path) -> Result<()> {
         state.decisions.len(),
         project_wide
     );
+    println!("edges: {edge_count}");
 
     let issues = state.validate();
     if !issues.is_empty() {
@@ -52,8 +55,7 @@ pub fn check(cwd: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::commands::{add_component, add_connection, init};
-    use crate::store::{COMPONENTS_DIR, ComponentFile, STORE_DIR};
-    use std::fs;
+    use crate::store::schema::EdgeKind;
     use tempfile::TempDir;
 
     #[test]
@@ -80,25 +82,6 @@ mod tests {
         add_component(tmp.path(), "database", None).unwrap();
         add_connection(tmp.path(), "auth", "database").unwrap();
         check(tmp.path()).unwrap();
-    }
-
-    #[test]
-    fn check_catches_hand_edited_corruption() {
-        let tmp = TempDir::new().unwrap();
-        init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth", None).unwrap();
-
-        let path = tmp
-            .path()
-            .join(STORE_DIR)
-            .join(COMPONENTS_DIR)
-            .join("auth.toml");
-        let mut comp: ComponentFile = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        comp.component.connects_to.push("nonexistent".into());
-        fs::write(&path, toml::to_string_pretty(&comp).unwrap()).unwrap();
-
-        let err = check(tmp.path()).unwrap_err();
-        assert!(matches!(err, Error::Validation(_)));
     }
 
     // ── full lifecycle ───────────────────────────────────────────────────
@@ -149,17 +132,24 @@ mod tests {
         rename_component(tmp.path(), "conversation", "design-engine").unwrap();
         check(tmp.path()).unwrap();
 
+        // Verify connections are now edges in the graph
         let store = Store::discover(tmp.path()).unwrap();
-        let cli = store.read_component("cli").unwrap();
+        let state = store.load_state().unwrap();
+
+        // cli → design-engine edge should exist (renamed from conversation)
         assert!(
-            cli.component
-                .connects_to
-                .contains(&"design-engine".to_string())
+            state.graph_index.edges.iter().any(|e| e.from == "cli"
+                && e.to == "design-engine"
+                && e.kind == EdgeKind::ConnectsTo)
         );
+
+        // Old name should be gone
         assert!(
-            !cli.component
-                .connects_to
-                .contains(&"conversation".to_string())
+            !state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.from == "conversation" || e.to == "conversation")
         );
 
         remove_decision(tmp.path(), "clap-derive").unwrap();

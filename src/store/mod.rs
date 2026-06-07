@@ -10,21 +10,38 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use fs2::FileExt;
 use serde::de::DeserializeOwned;
 
 use crate::{Error, Result};
 
+use schema::{EdgeEntry, EdgeKind, GraphIndex, NodeEntry, NodeKind};
+
 // Re-exports — public API surface of the store module.
+// Graph types (NodeKind, EdgeKind, etc.) are accessible via `store::schema::*`.
 pub use schema::{
-    COMPONENTS_DIR, ComponentFile, DECISIONS_DIR, DecisionFile, FORMAT_VERSION, ProjectFile,
-    STATE_DIR, STORE_DIR,
+    COMPONENTS_DIR, ComponentFile, DECISIONS_DIR, DecisionFile, FORMAT_VERSION, GRAPH_FILE,
+    PATTERNS_DIR, PatternFile, ProjectFile, STATE_DIR, STORE_DIR,
 };
 pub use state::{ProjectState, is_valid_kebab_case};
 
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+// ── Hashing ─────────────────────────────────────────────────────────────────
+
+/// BLAKE3 hash of raw file bytes, returned as lowercase hex.
+pub(crate) fn hash_file(path: &Path) -> Result<String> {
+    let bytes = fs::read(path)?;
+    Ok(blake3::hash(&bytes).to_hex().to_string())
+}
+
+/// BLAKE3 hash of an in-memory byte slice, returned as lowercase hex.
+pub(crate) fn hash_bytes(data: &[u8]) -> String {
+    blake3::hash(data).to_hex().to_string()
+}
 
 // ── Store ────────────────────────────────────────────────────────────────────
 
@@ -68,6 +85,10 @@ impl Store {
         self.root.join(DECISIONS_DIR)
     }
 
+    pub(crate) fn patterns_dir(&self) -> PathBuf {
+        self.root.join(PATTERNS_DIR)
+    }
+
     pub(crate) fn state_dir(&self) -> PathBuf {
         self.root.join(STATE_DIR)
     }
@@ -86,6 +107,14 @@ impl Store {
 
     pub fn decision_path(&self, name: &str) -> PathBuf {
         self.decisions_dir().join(format!("{name}.toml"))
+    }
+
+    pub fn pattern_path(&self, name: &str) -> PathBuf {
+        self.patterns_dir().join(format!("{name}.toml"))
+    }
+
+    pub(crate) fn graph_path(&self) -> PathBuf {
+        self.root.join(GRAPH_FILE)
     }
 
     // ── Path safety ─────────────────────────────────────────────────────
@@ -190,6 +219,18 @@ impl Store {
         }
     }
 
+    #[allow(dead_code)]
+    pub fn read_pattern(&self, name: &str) -> Result<PatternFile> {
+        let path = self.pattern_path(name);
+        match self.read_toml(&path) {
+            Ok(file) => Ok(file),
+            Err(Error::Io(e)) if e.kind() == ErrorKind::NotFound => Err(Error::Validation(
+                format!("pattern `{name}` does not exist"),
+            )),
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn list_components(&self) -> Result<Vec<String>> {
         state::list_toml_stems(&self.components_dir())
     }
@@ -197,6 +238,12 @@ impl Store {
     pub fn list_decisions(&self) -> Result<Vec<String>> {
         state::list_toml_stems(&self.decisions_dir())
     }
+
+    pub fn list_patterns(&self) -> Result<Vec<String>> {
+        state::list_toml_stems(&self.patterns_dir())
+    }
+
+    // ── load_state ──────────────────────────────────────────────────────
 
     pub fn load_state(&self) -> Result<ProjectState> {
         let project = self.read_project()?;
@@ -213,10 +260,151 @@ impl Store {
             decisions.insert(name, file);
         }
 
+        let mut patterns = BTreeMap::new();
+        for name in self.list_patterns()? {
+            let file: PatternFile = self.read_toml(&self.pattern_path(&name))?;
+            patterns.insert(name, file);
+        }
+
+        let graph_index = self.load_graph_index(&components, &decisions, &patterns)?;
+
         Ok(ProjectState {
             project,
             components,
             decisions,
+            patterns,
+            graph_index,
+        })
+    }
+
+    /// Reconcile the on-disk graph index with actual node files.
+    ///
+    /// Reads `graph.toml` for edges that cannot be inferred from node files
+    /// (ConnectsTo, Supersedes, DependsOn, etc.), rebuilds the node list from
+    /// the actual files with fresh BLAKE3 hashes, preserves tags from existing
+    /// nodes, filters dangling edges, and ensures BelongsTo edges for all
+    /// decisions.
+    fn load_graph_index(
+        &self,
+        components: &BTreeMap<String, ComponentFile>,
+        decisions: &BTreeMap<String, DecisionFile>,
+        patterns: &BTreeMap<String, PatternFile>,
+    ) -> Result<schema::GraphIndex> {
+        let graph_path = self.graph_path();
+
+        // Load existing graph for edges that cannot be inferred from files.
+        let existing: GraphIndex = if graph_path.exists() {
+            self.read_toml(&graph_path)?
+        } else {
+            GraphIndex {
+                version: 1,
+                rebuilt: Utc::now(),
+                nodes: vec![],
+                edges: vec![],
+            }
+        };
+
+        // Build node list from actual files, preserving tags from existing index.
+        let mut nodes = Vec::new();
+
+        // Project virtual node.
+        let project_path = self.root.join("project.toml");
+        let project_hash = hash_file(&project_path)?;
+        let project_tags = existing
+            .nodes
+            .iter()
+            .find(|n| n.name == "project")
+            .map(|n| n.tags.clone())
+            .unwrap_or_default();
+        nodes.push(NodeEntry {
+            name: "project".into(),
+            kind: NodeKind::Component,
+            tags: project_tags,
+            hash: project_hash,
+        });
+
+        for name in components.keys() {
+            let hash = hash_file(&self.component_path(name))?;
+            let tags = existing
+                .nodes
+                .iter()
+                .find(|n| n.name == *name)
+                .map(|n| n.tags.clone())
+                .unwrap_or_default();
+            nodes.push(NodeEntry {
+                name: name.clone(),
+                kind: NodeKind::Component,
+                tags,
+                hash,
+            });
+        }
+
+        for name in decisions.keys() {
+            let hash = hash_file(&self.decision_path(name))?;
+            let tags = existing
+                .nodes
+                .iter()
+                .find(|n| n.name == *name)
+                .map(|n| n.tags.clone())
+                .unwrap_or_default();
+            nodes.push(NodeEntry {
+                name: name.clone(),
+                kind: NodeKind::Decision,
+                tags,
+                hash,
+            });
+        }
+
+        for name in patterns.keys() {
+            let hash = hash_file(&self.pattern_path(name))?;
+            let tags = existing
+                .nodes
+                .iter()
+                .find(|n| n.name == *name)
+                .map(|n| n.tags.clone())
+                .unwrap_or_default();
+            nodes.push(NodeEntry {
+                name: name.clone(),
+                kind: NodeKind::Pattern,
+                tags,
+                hash,
+            });
+        }
+
+        // Preserve edges from existing graph that reference valid nodes.
+        let valid_names: std::collections::HashSet<&str> =
+            nodes.iter().map(|n| n.name.as_str()).collect();
+
+        let mut edges: Vec<EdgeEntry> = existing
+            .edges
+            .into_iter()
+            .filter(|e| {
+                valid_names.contains(e.from.as_str()) && valid_names.contains(e.to.as_str())
+            })
+            .collect();
+
+        // Ensure BelongsTo edges exist for all decisions.
+        for (name, dec) in decisions {
+            let has_belongs_to = edges
+                .iter()
+                .any(|e| e.from == *name && e.kind == EdgeKind::BelongsTo);
+            if !has_belongs_to {
+                edges.push(EdgeEntry {
+                    from: name.clone(),
+                    to: dec.decision.component.clone(),
+                    kind: EdgeKind::BelongsTo,
+                });
+            }
+        }
+
+        // Sort for deterministic output.
+        nodes.sort_by(|a, b| a.name.cmp(&b.name));
+
+        Ok(GraphIndex {
+            version: 1,
+            rebuilt: Utc::now(),
+            nodes,
+            edges,
         })
     }
 
@@ -267,7 +455,8 @@ fn compare_versions(a: &str, b: &str) -> Ordering {
 pub(crate) mod testing {
     use super::*;
     use crate::store::schema::{
-        Component, ComponentFile, Decision, DecisionFile, Project, ProjectFile,
+        Component, ComponentFile, Decision, DecisionFile, GraphIndex, NodeEntry, NodeKind, Project,
+        ProjectFile,
     };
     use chrono::{TimeZone, Utc};
 
@@ -275,6 +464,7 @@ pub(crate) mod testing {
         let root = dir.join(STORE_DIR);
         fs::create_dir_all(root.join(COMPONENTS_DIR)).unwrap();
         fs::create_dir_all(root.join(DECISIONS_DIR)).unwrap();
+        fs::create_dir_all(root.join(PATTERNS_DIR)).unwrap();
         fs::create_dir_all(root.join(STATE_DIR)).unwrap();
 
         let project = ProjectFile {
@@ -284,9 +474,25 @@ pub(crate) mod testing {
                 description: "A test project".into(),
             },
         };
+        let project_content = toml::to_string_pretty(&project).unwrap();
+        fs::write(root.join("project.toml"), &project_content).unwrap();
+
+        // Write initial graph.toml with the project virtual node.
+        let project_hash = hash_bytes(project_content.as_bytes());
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: Utc::now(),
+            nodes: vec![NodeEntry {
+                name: "project".into(),
+                kind: NodeKind::Component,
+                tags: vec![],
+                hash: project_hash,
+            }],
+            edges: vec![],
+        };
         fs::write(
-            root.join("project.toml"),
-            toml::to_string_pretty(&project).unwrap(),
+            root.join(GRAPH_FILE),
+            toml::to_string_pretty(&index).unwrap(),
         )
         .unwrap();
 
@@ -297,6 +503,7 @@ pub(crate) mod testing {
         let root = dir.join(STORE_DIR);
         fs::create_dir_all(root.join(COMPONENTS_DIR)).unwrap();
         fs::create_dir_all(root.join(DECISIONS_DIR)).unwrap();
+        fs::create_dir_all(root.join(PATTERNS_DIR)).unwrap();
         fs::create_dir_all(root.join(STATE_DIR)).unwrap();
 
         let project = ProjectFile {
@@ -306,9 +513,24 @@ pub(crate) mod testing {
                 description: "A test project".into(),
             },
         };
+        let project_content = toml::to_string_pretty(&project).unwrap();
+        fs::write(root.join("project.toml"), &project_content).unwrap();
+
+        let project_hash = hash_bytes(project_content.as_bytes());
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: Utc::now(),
+            nodes: vec![NodeEntry {
+                name: "project".into(),
+                kind: NodeKind::Component,
+                tags: vec![],
+                hash: project_hash,
+            }],
+            edges: vec![],
+        };
         fs::write(
-            root.join("project.toml"),
-            toml::to_string_pretty(&project).unwrap(),
+            root.join(GRAPH_FILE),
+            toml::to_string_pretty(&index).unwrap(),
         )
         .unwrap();
 
@@ -320,7 +542,6 @@ pub(crate) mod testing {
             component: Component {
                 name: name.into(),
                 description: format!("The {name} component"),
-                connects_to: vec![],
             },
         }
     }
@@ -333,7 +554,6 @@ pub(crate) mod testing {
                 reason: format!("Reason for {name}"),
                 alternatives: vec![],
                 created: Utc.with_ymd_and_hms(2025, 6, 1, 12, 0, 0).unwrap(),
-                supersedes: None,
             },
         }
     }
@@ -486,6 +706,7 @@ mod tests {
 
         assert!(store.list_components().unwrap().is_empty());
         assert!(store.list_decisions().unwrap().is_empty());
+        assert!(store.list_patterns().unwrap().is_empty());
     }
 
     #[test]
@@ -509,6 +730,40 @@ mod tests {
         assert_eq!(state.decisions.len(), 1);
         assert!(state.components.contains_key("auth"));
         assert!(state.decisions.contains_key("token-format"));
+        assert!(state.patterns.is_empty());
+
+        // Graph index should have: project + auth + token-format = 3 nodes
+        assert_eq!(state.graph_index.nodes.len(), 3);
+        // BelongsTo edge inferred for token-format → auth
+        assert!(
+            state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.from == "token-format"
+                    && e.to == "auth"
+                    && e.kind == EdgeKind::BelongsTo)
+        );
+    }
+
+    #[test]
+    fn load_state_reconciles_missing_graph_toml() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store(tmp.path());
+        let lock = store.lock().unwrap();
+
+        // Remove graph.toml to simulate pre-graph store
+        let _ = fs::remove_file(store.graph_path());
+
+        let auth = sample_component("auth");
+        store
+            .write_atomic(&lock, &store.component_path("auth"), &auth)
+            .unwrap();
+
+        let state = store.load_state().unwrap();
+        // Should still build a graph index from files
+        assert!(state.graph_index.nodes.iter().any(|n| n.name == "project"));
+        assert!(state.graph_index.nodes.iter().any(|n| n.name == "auth"));
     }
 
     // ── check_version ────────────────────────────────────────────────────
@@ -574,7 +829,7 @@ mod tests {
 
     #[test]
     fn compare_versions_equal() {
-        assert_eq!(compare_versions("0.1.0", "0.1.0"), Ordering::Equal);
+        assert_eq!(compare_versions("0.2.0", "0.2.0"), Ordering::Equal);
         assert_eq!(compare_versions("1.2.3", "1.2.3"), Ordering::Equal);
     }
 
@@ -601,5 +856,27 @@ mod tests {
         assert_eq!(compare_versions("abc", "0.0.0"), Ordering::Equal);
         assert_eq!(compare_versions("1", "1.0.0"), Ordering::Equal);
         assert_eq!(compare_versions("1.2", "1.2.0"), Ordering::Equal);
+    }
+
+    // ── hash ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn hash_bytes_is_deterministic() {
+        let a = hash_bytes(b"hello world");
+        let b = hash_bytes(b"hello world");
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 64); // 256-bit hex
+    }
+
+    #[test]
+    fn hash_file_matches_hash_bytes() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("test.txt");
+        let content = b"test content";
+        fs::write(&path, content).unwrap();
+
+        let file_hash = hash_file(&path).unwrap();
+        let bytes_hash = hash_bytes(content);
+        assert_eq!(file_hash, bytes_hash);
     }
 }

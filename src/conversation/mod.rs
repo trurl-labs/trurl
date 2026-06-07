@@ -93,7 +93,6 @@ async fn conversation_loop(
                 &dec.choice,
                 &dec.reason,
                 &dec.alternatives,
-                dec.supersedes.as_deref(),
             )?;
             session.decisions_recorded.push(stem.clone());
             eprintln!("  ✓ recorded: {stem}");

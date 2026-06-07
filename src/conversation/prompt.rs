@@ -1,4 +1,5 @@
 use crate::store;
+use crate::store::schema::EdgeKind;
 
 /// Build the system prompt from component context, existing decisions, and mode.
 pub(crate) fn build_system_prompt(
@@ -19,11 +20,16 @@ pub(crate) fn build_system_prompt(
         if !comp.component.description.is_empty() {
             p.push_str(&format!("Description: {}\n", comp.component.description));
         }
-        if !comp.component.connects_to.is_empty() {
-            p.push_str(&format!(
-                "Connects to: {}\n",
-                comp.component.connects_to.join(", ")
-            ));
+        // Get connections from graph index.
+        let connects_to: Vec<&str> = state
+            .graph_index
+            .edges
+            .iter()
+            .filter(|e| e.from == component && e.kind == EdgeKind::ConnectsTo)
+            .map(|e| e.to.as_str())
+            .collect();
+        if !connects_to.is_empty() {
+            p.push_str(&format!("Connects to: {}\n", connects_to.join(", ")));
         }
         p.push('\n');
     } else if component == "project" {
@@ -73,10 +79,8 @@ pub(crate) fn build_system_prompt(
         p.push_str(
             "## Mode: Revisit\n\
              Challenge each existing decision. Ask if the reasoning still holds \
-             and if better alternatives exist. For changed decisions, output the \
-             new decision JSON with a \"supersedes\" field naming the decision \
-             being replaced (e.g. \"supersedes\": \"auth-token-format\"). \
-             Skip decisions the user wants to keep.\n\n",
+             and if better alternatives exist. When a decision is revised, output \
+             the new decision JSON. Skip decisions the user wants to keep.\n\n",
         );
     }
 
@@ -103,7 +107,8 @@ pub(crate) fn build_system_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::schema::{Component, ComponentFile, Project, ProjectFile};
+    use crate::store::schema::*;
+    use chrono::{TimeZone, Utc};
     use std::collections::BTreeMap;
 
     fn test_state() -> store::ProjectState {
@@ -114,23 +119,54 @@ mod tests {
                 component: Component {
                     name: "auth".into(),
                     description: "Authentication service".into(),
-                    connects_to: vec!["database".into()],
                 },
             },
         );
 
         let project = ProjectFile {
-            trurl_version: "0.1.0".into(),
+            trurl_version: "0.2.0".into(),
             project: Project {
                 name: "test-project".into(),
                 description: String::new(),
             },
         };
 
+        let graph_index = GraphIndex {
+            version: 1,
+            rebuilt: Utc.with_ymd_and_hms(2025, 6, 1, 12, 0, 0).unwrap(),
+            nodes: vec![
+                NodeEntry {
+                    name: "project".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: String::new(),
+                },
+                NodeEntry {
+                    name: "auth".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: String::new(),
+                },
+                NodeEntry {
+                    name: "database".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: String::new(),
+                },
+            ],
+            edges: vec![EdgeEntry {
+                from: "auth".into(),
+                to: "database".into(),
+                kind: EdgeKind::ConnectsTo,
+            }],
+        };
+
         store::ProjectState {
             project,
             components,
             decisions: BTreeMap::new(),
+            patterns: BTreeMap::new(),
+            graph_index,
         }
     }
 
@@ -158,7 +194,6 @@ mod tests {
         let prompt = build_system_prompt("auth", &state, true);
         assert!(prompt.contains("Revisit"));
         assert!(prompt.contains("Challenge"));
-        assert!(prompt.contains("\"supersedes\""));
     }
 
     #[test]

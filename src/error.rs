@@ -34,6 +34,12 @@ pub enum Error {
     #[error("{0}")]
     Validation(String),
 
+    #[error("graph integrity violation: {0}")]
+    GraphIntegrity(String),
+
+    #[error("operation blocked by cascade rule: {0}")]
+    CascadeBlocked(String),
+
     #[error("{0}")]
     ProviderConfig(String),
 

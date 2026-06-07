@@ -7,6 +7,7 @@ use serde::de::DeserializeOwned;
 
 use crate::{Error, Result};
 
+use super::schema::GraphIndex;
 use super::{Store, StoreLock};
 
 // ── PendingWrite ─────────────────────────────────────────────────────────────
@@ -14,8 +15,15 @@ use super::{Store, StoreLock};
 /// A file write staged for batch commit.
 /// Created via [`Store::prepare_write`], executed via [`Store::commit_batch`].
 pub struct PendingWrite {
-    pub(super) target: PathBuf,
-    pub(super) content: String,
+    pub(crate) target: PathBuf,
+    pub(crate) content: String,
+}
+
+impl PendingWrite {
+    /// BLAKE3 hash of the serialized content that will be written.
+    pub fn content_hash(&self) -> String {
+        super::hash_bytes(self.content.as_bytes())
+    }
 }
 
 // ── Store write methods ─────────────────────────────────────────────────────
@@ -101,23 +109,41 @@ impl Store {
     }
 
     /// Execute a batch of writes and removes as a two-phase commit.
+    ///
     /// Phase 1: write all content to `.state/tmp/`.
     /// Phase 2: verify each temp file (byte-compare; type-safe check was in `prepare_write`).
     /// Phase 3: rename all temp files to final paths (each atomic on POSIX).
+    ///          If `graph_update` is `Some`, `graph.toml` is appended as the
+    ///          **last** rename — serving as the commit point per the storage spec.
     /// Phase 4: remove old files (best-effort — renames already committed).
+    ///
     /// Caller **must** hold a [`StoreLock`].
     pub fn commit_batch(
         &self,
         _lock: &StoreLock,
         writes: Vec<PendingWrite>,
         removes: Vec<PathBuf>,
+        graph_update: Option<&GraphIndex>,
     ) -> Result<()> {
-        if writes.is_empty() && removes.is_empty() {
+        if writes.is_empty() && removes.is_empty() && graph_update.is_none() {
             return Ok(());
         }
 
+        // Build the full set of writes: node files first, graph.toml last.
+        let mut all_writes = writes;
+
+        if let Some(index) = graph_update {
+            let content = toml::to_string_pretty(index)?;
+            toml::from_str::<GraphIndex>(&content).map_err(|e| {
+                Error::Validation(format!("graph index round-trip verification failed: {e}"))
+            })?;
+            let target = self.graph_path();
+            self.verify_path(&target)?;
+            all_writes.push(PendingWrite { target, content });
+        }
+
         // Verify all target paths up-front before touching the filesystem.
-        for write in &writes {
+        for write in &all_writes {
             self.verify_path(&write.target)?;
         }
         for path in &removes {
@@ -128,9 +154,9 @@ impl Store {
         fs::create_dir_all(&tmp_dir)?;
 
         // Phase 1: Write all to tmp
-        let mut staged: Vec<(PathBuf, PathBuf)> = Vec::with_capacity(writes.len());
+        let mut staged: Vec<(PathBuf, PathBuf)> = Vec::with_capacity(all_writes.len());
 
-        for (i, write) in writes.iter().enumerate() {
+        for (i, write) in all_writes.iter().enumerate() {
             let filename = write
                 .target
                 .file_name()
@@ -156,7 +182,7 @@ impl Store {
                     return Err(Error::Io(e));
                 }
             };
-            if readback != writes[i].content {
+            if readback != all_writes[i].content {
                 cleanup_tmp_files(&staged);
                 return Err(Error::Validation(
                     "batch write verification failed: content mismatch".into(),
@@ -174,7 +200,8 @@ impl Store {
             }
         }
 
-        // Phase 3: Rename all to final paths
+        // Phase 3: Rename all to final paths.
+        // graph.toml is last (appended last to all_writes).
         for (i, (tmp_path, target)) in staged.iter().enumerate() {
             if let Err(e) = fs::rename(tmp_path, target) {
                 for (remaining, _) in staged.iter().skip(i + 1) {
@@ -201,6 +228,7 @@ impl Store {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn remove_file(&self, _lock: &StoreLock, target: &Path) -> Result<()> {
         self.verify_path(target)?;
         Ok(fs::remove_file(target)?)
@@ -339,7 +367,7 @@ mod tests {
                 .unwrap(),
         ];
 
-        store.commit_batch(&lock, writes, vec![]).unwrap();
+        store.commit_batch(&lock, writes, vec![], None).unwrap();
 
         let read1 = store.read_component("auth").unwrap();
         assert_eq!(read1, comp1);
@@ -366,7 +394,7 @@ mod tests {
         ];
         let removes = vec![store.component_path("old-name")];
 
-        store.commit_batch(&lock, writes, removes).unwrap();
+        store.commit_batch(&lock, writes, removes, None).unwrap();
 
         assert!(store.component_path("new-name").exists());
         assert!(!store.component_path("old-name").exists());
@@ -385,7 +413,7 @@ mod tests {
                 .unwrap(),
         ];
 
-        store.commit_batch(&lock, writes, vec![]).unwrap();
+        store.commit_batch(&lock, writes, vec![], None).unwrap();
 
         let tmp_dir = store.root().join(STATE_DIR).join("tmp");
         if tmp_dir.exists() {
@@ -401,7 +429,55 @@ mod tests {
         let lock = store.lock().unwrap();
 
         let removes = vec![store.component_path("nonexistent")];
-        store.commit_batch(&lock, vec![], removes).unwrap();
+        store.commit_batch(&lock, vec![], removes, None).unwrap();
+    }
+
+    #[test]
+    fn commit_batch_writes_graph_update() {
+        use crate::store::schema::*;
+        use chrono::Utc;
+
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store(tmp.path());
+        let lock = store.lock().unwrap();
+
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: Utc::now(),
+            nodes: vec![NodeEntry {
+                name: "test".into(),
+                kind: NodeKind::Component,
+                tags: vec![],
+                hash: "abc".into(),
+            }],
+            edges: vec![],
+        };
+
+        store
+            .commit_batch(&lock, vec![], vec![], Some(&index))
+            .unwrap();
+
+        assert!(store.graph_path().exists());
+        let read_back: GraphIndex =
+            toml::from_str(&fs::read_to_string(store.graph_path()).unwrap()).unwrap();
+        assert_eq!(read_back.nodes.len(), 1);
+        assert_eq!(read_back.nodes[0].name, "test");
+    }
+
+    #[test]
+    fn content_hash_is_deterministic() {
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store(tmp.path());
+
+        let comp = sample_component("auth");
+        let w1 = store
+            .prepare_write(&store.component_path("auth"), &comp)
+            .unwrap();
+        let w2 = store
+            .prepare_write(&store.component_path("auth"), &comp)
+            .unwrap();
+        assert_eq!(w1.content_hash(), w2.content_hash());
+        assert_eq!(w1.content_hash().len(), 64);
     }
 
     // ── remove_file ──────────────────────────────────────────────────────

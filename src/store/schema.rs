@@ -30,10 +30,6 @@ pub struct Component {
     pub name: String,
 
     pub description: String,
-
-    /// Names of components this one connects to.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub connects_to: Vec<String>,
 }
 
 // ── decisions/<name>.toml ────────────────────────────────────────────────────
@@ -57,15 +53,73 @@ pub struct Decision {
 
     /// When this decision was recorded (UTC, ISO 8601 / RFC 3339).
     pub created: DateTime<Utc>,
+}
 
-    /// Filename (without `.toml`) of the decision this supersedes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub supersedes: Option<String>,
+// ── patterns/<name>.toml ─────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PatternFile {
+    pub pattern: Pattern,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Pattern {
+    pub name: String,
+
+    pub description: String,
+}
+
+// ── Graph index (graph.toml) ─────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeKind {
+    Component,
+    Decision,
+    Pattern,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeKind {
+    BelongsTo,
+    ConnectsTo,
+    DependsOn,
+    Constrains,
+    Supersedes,
+    MemberOf,
+    AppliesTo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeEntry {
+    pub name: String,
+    pub kind: NodeKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EdgeEntry {
+    pub from: String,
+    pub to: String,
+    pub kind: EdgeKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphIndex {
+    pub version: u32,
+    pub rebuilt: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<NodeEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edges: Vec<EdgeEntry>,
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-pub const FORMAT_VERSION: &str = "0.1.0";
+pub const FORMAT_VERSION: &str = "0.2.0";
 
 pub const STORE_DIR: &str = ".trurl";
 
@@ -73,7 +127,11 @@ pub const COMPONENTS_DIR: &str = "components";
 
 pub const DECISIONS_DIR: &str = "decisions";
 
+pub const PATTERNS_DIR: &str = "patterns";
+
 pub const STATE_DIR: &str = ".state";
+
+pub const GRAPH_FILE: &str = "graph.toml";
 
 #[cfg(test)]
 mod tests {
@@ -83,7 +141,7 @@ mod tests {
     #[test]
     fn project_round_trip() {
         let file = ProjectFile {
-            trurl_version: "0.1.0".into(),
+            trurl_version: "0.2.0".into(),
             project: Project {
                 name: "my-project".into(),
                 description: "Test project".into(),
@@ -100,7 +158,6 @@ mod tests {
             component: Component {
                 name: "auth".into(),
                 description: "Authentication and token management".into(),
-                connects_to: vec!["rate-limiter".into(), "database".into()],
             },
         };
         let serialized = toml::to_string_pretty(&file).expect("serialize");
@@ -117,7 +174,6 @@ mod tests {
                 reason: "Stateless, no session store needed".into(),
                 alternatives: vec!["Session cookies — rejected: requires server-side state".into()],
                 created: Utc.with_ymd_and_hms(2025, 6, 1, 10, 30, 0).unwrap(),
-                supersedes: None,
             },
         };
         let serialized = toml::to_string_pretty(&file).expect("serialize");
@@ -126,38 +182,112 @@ mod tests {
     }
 
     #[test]
-    fn component_empty_connects_to_omitted() {
-        let file = ComponentFile {
-            component: Component {
-                name: "standalone".into(),
-                description: "No connections".into(),
-                connects_to: vec![],
+    fn pattern_round_trip() {
+        let file = PatternFile {
+            pattern: Pattern {
+                name: "All persistent state uses Redis".into(),
+                description: "Shared Redis pool via app state".into(),
             },
         };
         let serialized = toml::to_string_pretty(&file).expect("serialize");
+        let deserialized: PatternFile = toml::from_str(&serialized).expect("deserialize");
+        assert_eq!(file, deserialized);
+    }
+
+    #[test]
+    fn graph_index_round_trip() {
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: Utc.with_ymd_and_hms(2025, 6, 1, 12, 0, 0).unwrap(),
+            nodes: vec![
+                NodeEntry {
+                    name: "auth".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "abc123".into(),
+                },
+                NodeEntry {
+                    name: "use-jwt".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec!["auth".into(), "security".into()],
+                    hash: "def456".into(),
+                },
+            ],
+            edges: vec![EdgeEntry {
+                from: "use-jwt".into(),
+                to: "auth".into(),
+                kind: EdgeKind::BelongsTo,
+            }],
+        };
+        let serialized = toml::to_string_pretty(&index).expect("serialize");
+        let deserialized: GraphIndex = toml::from_str(&serialized).expect("deserialize");
+        assert_eq!(index, deserialized);
+    }
+
+    #[test]
+    fn graph_index_empty_round_trip() {
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: Utc.with_ymd_and_hms(2025, 6, 1, 12, 0, 0).unwrap(),
+            nodes: vec![],
+            edges: vec![],
+        };
+        let serialized = toml::to_string_pretty(&index).expect("serialize");
+        assert!(!serialized.contains("[[nodes]]"));
+        assert!(!serialized.contains("[[edges]]"));
+        let deserialized: GraphIndex = toml::from_str(&serialized).expect("deserialize");
+        assert_eq!(index, deserialized);
+    }
+
+    #[test]
+    fn edge_kind_serializes_snake_case() {
+        let edge = EdgeEntry {
+            from: "a".into(),
+            to: "b".into(),
+            kind: EdgeKind::BelongsTo,
+        };
+        let serialized = toml::to_string_pretty(&edge).expect("serialize");
         assert!(
-            !serialized.contains("connects_to"),
-            "empty connects_to should be omitted"
+            serialized.contains(r#"kind = "belongs_to""#),
+            "EdgeKind should serialize as snake_case, got:\n{serialized}"
         );
     }
 
     #[test]
-    fn decision_empty_supersedes_omitted() {
-        let file = DecisionFile {
-            decision: Decision {
-                component: "auth".into(),
-                choice: "Use Redis".into(),
-                reason: "Fast".into(),
-                alternatives: vec![],
-                created: Utc.with_ymd_and_hms(2025, 6, 1, 10, 30, 0).unwrap(),
-                supersedes: None,
-            },
+    fn node_kind_serializes_snake_case() {
+        let node = NodeEntry {
+            name: "auth".into(),
+            kind: NodeKind::Component,
+            tags: vec![],
+            hash: "abc".into(),
         };
-        let serialized = toml::to_string_pretty(&file).expect("serialize");
+        let serialized = toml::to_string_pretty(&node).expect("serialize");
         assert!(
-            !serialized.contains("supersedes"),
-            "empty supersedes should be omitted"
+            serialized.contains(r#"kind = "component""#),
+            "NodeKind should serialize as snake_case, got:\n{serialized}"
         );
+    }
+
+    #[test]
+    fn all_edge_kinds_round_trip() {
+        for kind in [
+            EdgeKind::BelongsTo,
+            EdgeKind::ConnectsTo,
+            EdgeKind::DependsOn,
+            EdgeKind::Constrains,
+            EdgeKind::Supersedes,
+            EdgeKind::MemberOf,
+            EdgeKind::AppliesTo,
+        ] {
+            let edge = EdgeEntry {
+                from: "a".into(),
+                to: "b".into(),
+                kind,
+            };
+            let s = toml::to_string_pretty(&edge).expect("serialize");
+            let d: EdgeEntry = toml::from_str(&s).expect("deserialize");
+            assert_eq!(edge, d);
+        }
     }
 
     #[test]
@@ -169,7 +299,6 @@ mod tests {
                 reason: "Stateless".into(),
                 alternatives: vec![],
                 created: Utc.with_ymd_and_hms(2025, 6, 1, 10, 30, 0).unwrap(),
-                supersedes: None,
             },
         };
         let serialized = toml::to_string_pretty(&file).expect("serialize");
@@ -198,7 +327,6 @@ created = "2025-06-01T10:30:00Z"
             file.decision.created,
             Utc.with_ymd_and_hms(2025, 6, 1, 10, 30, 0).unwrap()
         );
-        assert!(file.decision.supersedes.is_none());
     }
 
     #[test]

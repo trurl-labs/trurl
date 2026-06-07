@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
+use crate::store::schema::EdgeKind;
 use crate::store::{DecisionFile, ProjectState};
 
 // ── get_context ──────────────────────────────────────────────────────────
@@ -23,12 +24,22 @@ pub(crate) fn get_context(
         .get(component)
         .ok_or_else(|| format!("component `{component}` does not exist"))?;
 
+    // Forward connections: this component connects to...
+    let connects_to: Vec<&str> = state
+        .graph_index
+        .edges
+        .iter()
+        .filter(|e| e.from == component && e.kind == EdgeKind::ConnectsTo)
+        .map(|e| e.to.as_str())
+        .collect();
+
     // Reverse connections: who connects TO this component.
     let connects_from: Vec<&str> = state
-        .components
+        .graph_index
+        .edges
         .iter()
-        .filter(|(_, c)| c.component.connects_to.iter().any(|t| t == component))
-        .map(|(name, _)| name.as_str())
+        .filter(|e| e.to == component && e.kind == EdgeKind::ConnectsTo)
+        .map(|e| e.from.as_str())
         .collect();
 
     let component_decisions: Vec<(&String, &DecisionFile)> = state
@@ -44,12 +55,10 @@ pub(crate) fn get_context(
         .collect();
 
     // Related: decisions from directly connected components (both directions).
-    let connected: BTreeSet<&str> = comp
-        .component
-        .connects_to
+    let connected: BTreeSet<&str> = connects_to
         .iter()
-        .map(String::as_str)
-        .chain(connects_from.iter().copied())
+        .chain(connects_from.iter())
+        .copied()
         .collect();
 
     let related_decisions: Vec<(&String, &DecisionFile)> = state
@@ -76,7 +85,7 @@ pub(crate) fn get_context(
         "component": {
             "name": comp.component.name,
             "description": comp.component.description,
-            "connects_to": comp.component.connects_to,
+            "connects_to": connects_to,
             "connects_from": connects_from,
         },
         "decisions": decision_list(&component_decisions),
@@ -139,18 +148,6 @@ fn project_context(state: &ProjectState, task_description: Option<&str>) -> Valu
 // ── build_brief ──────────────────────────────────────────────────────────
 
 /// Format the authoritative brief that coding agents consume directly.
-/// Structure follows the spec:
-/// ```text
-/// TASK: <if provided>
-/// RULES:
-/// - <project-wide decisions>
-/// COMPONENT: <name>
-/// - <choice> (<reason>)
-/// RELATED:
-/// - <connected component>: <choice>
-/// WHEN UNCERTAIN:
-/// STOP. …
-/// ```
 fn build_brief(
     component: &str,
     task_description: Option<&str>,
@@ -207,9 +204,6 @@ fn build_brief(
 // ── check_pattern ────────────────────────────────────────────────────────
 
 /// Check whether a pattern or approach is covered by existing decisions.
-/// Performs case-insensitive keyword overlap between the query and every
-/// decision's choice + reason text.  Results are sorted by relevance
-/// (number of matching keywords).
 pub(crate) fn check_pattern(state: &ProjectState, description: &str) -> Value {
     let query_words = extract_words(description);
     if query_words.is_empty() {
@@ -280,10 +274,18 @@ pub(crate) fn get_architecture(state: &ProjectState) -> Value {
                 .filter(|d| d.decision.component == *name)
                 .count();
 
+            let connects_to: Vec<&str> = state
+                .graph_index
+                .edges
+                .iter()
+                .filter(|e| e.from == *name && e.kind == EdgeKind::ConnectsTo)
+                .map(|e| e.to.as_str())
+                .collect();
+
             serde_json::json!({
                 "name": name,
                 "description": comp.component.description,
-                "connects_to": comp.component.connects_to,
+                "connects_to": connects_to,
                 "decision_count": decision_count,
             })
         })
@@ -431,7 +433,6 @@ mod tests {
                 component: Component {
                     name: "auth".into(),
                     description: "Authentication and token management".into(),
-                    connects_to: vec!["database".into()],
                 },
             },
         );
@@ -441,7 +442,6 @@ mod tests {
                 component: Component {
                     name: "database".into(),
                     description: "Database access layer".into(),
-                    connects_to: vec![],
                 },
             },
         );
@@ -451,7 +451,6 @@ mod tests {
                 component: Component {
                     name: "rate-limiter".into(),
                     description: "Request rate limiting".into(),
-                    connects_to: vec!["database".into()],
                 },
             },
         );
@@ -467,7 +466,6 @@ mod tests {
                     reason: "Stateless, no session store needed".into(),
                     alternatives: vec!["Session cookies — rejected".into()],
                     created: ts,
-                    supersedes: None,
                 },
             },
         );
@@ -480,7 +478,6 @@ mod tests {
                     reason: "Consistent error propagation".into(),
                     alternatives: vec![],
                     created: ts,
-                    supersedes: None,
                 },
             },
         );
@@ -493,14 +490,92 @@ mod tests {
                     reason: "Avoid per-request connection overhead".into(),
                     alternatives: vec![],
                     created: ts,
-                    supersedes: None,
                 },
             },
         );
 
+        // Build graph index with nodes and edges.
+        let graph_index = GraphIndex {
+            version: 1,
+            rebuilt: ts,
+            nodes: vec![
+                NodeEntry {
+                    name: "project".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: String::new(),
+                },
+                NodeEntry {
+                    name: "auth".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: String::new(),
+                },
+                NodeEntry {
+                    name: "database".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: String::new(),
+                },
+                NodeEntry {
+                    name: "rate-limiter".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: String::new(),
+                },
+                NodeEntry {
+                    name: "use-jwt".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: String::new(),
+                },
+                NodeEntry {
+                    name: "error-strategy".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: String::new(),
+                },
+                NodeEntry {
+                    name: "db-pool".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: String::new(),
+                },
+            ],
+            edges: vec![
+                // ConnectsTo edges (previously in component.connects_to)
+                EdgeEntry {
+                    from: "auth".into(),
+                    to: "database".into(),
+                    kind: EdgeKind::ConnectsTo,
+                },
+                EdgeEntry {
+                    from: "rate-limiter".into(),
+                    to: "database".into(),
+                    kind: EdgeKind::ConnectsTo,
+                },
+                // BelongsTo edges
+                EdgeEntry {
+                    from: "use-jwt".into(),
+                    to: "auth".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+                EdgeEntry {
+                    from: "error-strategy".into(),
+                    to: "project".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+                EdgeEntry {
+                    from: "db-pool".into(),
+                    to: "database".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+            ],
+        };
+
         ProjectState {
             project: ProjectFile {
-                trurl_version: "0.1.0".into(),
+                trurl_version: "0.2.0".into(),
                 project: Project {
                     name: "test-project".into(),
                     description: "A test project".into(),
@@ -508,6 +583,8 @@ mod tests {
             },
             components,
             decisions,
+            patterns: BTreeMap::new(),
+            graph_index,
         }
     }
 
@@ -672,6 +749,8 @@ mod tests {
 
         let auth = components.iter().find(|c| c["name"] == "auth").unwrap();
         assert_eq!(auth["decision_count"], 1);
+        let auth_connects = auth["connects_to"].as_array().unwrap();
+        assert!(auth_connects.iter().any(|v| v == "database"));
     }
 
     // ── extract_words ───────────────────────────────────────────────────

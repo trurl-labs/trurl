@@ -2,7 +2,7 @@ use std::path::Path;
 
 use chrono::Utc;
 
-use crate::store::schema::{Decision, DecisionFile};
+use crate::store::schema::{Decision, DecisionFile, EdgeEntry, EdgeKind, NodeEntry, NodeKind};
 use crate::store::{self};
 use crate::{Error, Result};
 
@@ -45,20 +45,46 @@ pub fn decide(
             reason: reason.into(),
             alternatives: alternatives.to_vec(),
             created: Utc::now(),
-            supersedes: supersedes.map(String::from),
         },
     };
 
-    state.decisions.insert(stem.clone(), decision.clone());
+    let write = store.prepare_write(&store.decision_path(&stem), &decision)?;
+    let hash = write.content_hash();
+
+    // Add node to graph index.
+    state.graph_index.nodes.push(NodeEntry {
+        name: stem.clone(),
+        kind: NodeKind::Decision,
+        tags: vec![],
+        hash,
+    });
+
+    // Add BelongsTo edge.
+    state.graph_index.edges.push(EdgeEntry {
+        from: stem.clone(),
+        to: component.into(),
+        kind: EdgeKind::BelongsTo,
+    });
+
+    // Add Supersedes edge if applicable.
+    if let Some(sup) = supersedes {
+        state.graph_index.edges.push(EdgeEntry {
+            from: stem.clone(),
+            to: sup.into(),
+            kind: EdgeKind::Supersedes,
+        });
+    }
+
+    state.decisions.insert(stem.clone(), decision);
     validate_mutation(&state)?;
 
-    store.write_atomic(&lock, &store.decision_path(&stem), &decision)?;
+    store.commit_batch(&lock, vec![write], vec![], Some(&state.graph_index))?;
     println!("Recorded decision `{stem}`");
     Ok(())
 }
 
 pub fn remove_decision(cwd: &Path, name: &str) -> Result<()> {
-    let (store, lock, state) = open_store_mut(cwd)?;
+    let (store, lock, mut state) = open_store_mut(cwd)?;
 
     if !state.decisions.contains_key(name) {
         return Err(Error::Validation(format!(
@@ -66,11 +92,13 @@ pub fn remove_decision(cwd: &Path, name: &str) -> Result<()> {
         )));
     }
 
-    let dependents: Vec<&str> = state
-        .decisions
+    // Warn about broken supersede chains via graph edges.
+    let dependents: Vec<String> = state
+        .graph_index
+        .edges
         .iter()
-        .filter(|(_, d)| d.decision.supersedes.as_deref() == Some(name))
-        .map(|(n, _)| n.as_str())
+        .filter(|e| e.to == name && e.kind == EdgeKind::Supersedes)
+        .map(|e| e.from.clone())
         .collect();
 
     if !dependents.is_empty() {
@@ -80,7 +108,20 @@ pub fn remove_decision(cwd: &Path, name: &str) -> Result<()> {
         );
     }
 
-    store.remove_file(&lock, &store.decision_path(name))?;
+    // Remove from state.
+    state.decisions.remove(name);
+
+    // Remove node and all edges involving this decision from graph index.
+    state.graph_index.nodes.retain(|n| n.name != name);
+    state
+        .graph_index
+        .edges
+        .retain(|e| e.from != name && e.to != name);
+
+    validate_mutation(&state)?;
+
+    let removes = vec![store.decision_path(name)];
+    store.commit_batch(&lock, vec![], removes, Some(&state.graph_index))?;
     println!("Removed decision `{name}`");
     Ok(())
 }
@@ -90,6 +131,7 @@ mod tests {
     use super::*;
     use crate::commands::{add_component, init};
     use crate::store::Store;
+    use crate::store::schema::EdgeKind;
     use tempfile::TempDir;
 
     #[test]
@@ -154,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn decide_supersedes_existing() {
+    fn decide_supersedes_creates_edge() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
         add_component(tmp.path(), "auth", None).unwrap();
@@ -171,8 +213,35 @@ mod tests {
         .unwrap();
 
         let store = Store::discover(tmp.path()).unwrap();
-        let dec = store.read_decision("jwt-tokens").unwrap();
-        assert_eq!(dec.decision.supersedes.as_deref(), Some("session-cookies"));
+        let state = store.load_state().unwrap();
+        assert!(
+            state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.from == "jwt-tokens"
+                    && e.to == "session-cookies"
+                    && e.kind == EdgeKind::Supersedes)
+        );
+    }
+
+    #[test]
+    fn decide_creates_belongs_to_edge() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
+
+        decide(tmp.path(), "auth", "Use JWT", "Stateless", None, &[]).unwrap();
+
+        let store = Store::discover(tmp.path()).unwrap();
+        let state = store.load_state().unwrap();
+        assert!(
+            state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.from == "use-jwt" && e.to == "auth" && e.kind == EdgeKind::BelongsTo)
+        );
     }
 
     #[test]
@@ -255,19 +324,6 @@ mod tests {
         decide(tmp.path(), "project", "Test decision", "Testing", None, &[]).unwrap();
     }
 
-    #[test]
-    fn decide_supersedes_is_none_when_omitted() {
-        let tmp = TempDir::new().unwrap();
-        init(tmp.path()).unwrap();
-        add_component(tmp.path(), "auth", None).unwrap();
-
-        decide(tmp.path(), "auth", "Use JWT", "Stateless", None, &[]).unwrap();
-
-        let store = Store::discover(tmp.path()).unwrap();
-        let dec = store.read_decision("use-jwt").unwrap();
-        assert!(dec.decision.supersedes.is_none());
-    }
-
     // ── remove decision ──────────────────────────────────────────────────
 
     #[test]
@@ -281,6 +337,26 @@ mod tests {
 
         let store = Store::discover(tmp.path()).unwrap();
         assert!(store.list_decisions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn remove_decision_cleans_up_edges() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
+        decide(tmp.path(), "auth", "Use JWT", "Stateless", None, &[]).unwrap();
+
+        remove_decision(tmp.path(), "use-jwt").unwrap();
+
+        let store = Store::discover(tmp.path()).unwrap();
+        let state = store.load_state().unwrap();
+        assert!(
+            !state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.from == "use-jwt" || e.to == "use-jwt")
+        );
     }
 
     #[test]
@@ -311,10 +387,19 @@ mod tests {
         )
         .unwrap();
 
+        // Removing session-cookies should succeed (with warning)
         remove_decision(tmp.path(), "session-cookies").unwrap();
 
+        // jwt-tokens should still exist but its Supersedes edge is cleaned up
         let store = Store::discover(tmp.path()).unwrap();
-        let dec = store.read_decision("jwt-tokens").unwrap();
-        assert_eq!(dec.decision.supersedes.as_deref(), Some("session-cookies"));
+        let state = store.load_state().unwrap();
+        assert!(state.decisions.contains_key("jwt-tokens"));
+        assert!(
+            !state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.to == "session-cookies")
+        );
     }
 }

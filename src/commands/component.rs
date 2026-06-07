@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::store::schema::{Component, ComponentFile};
+use crate::store::schema::{Component, ComponentFile, EdgeEntry, EdgeKind, NodeEntry, NodeKind};
 use crate::store::{self};
 use crate::{Error, Result};
 
@@ -23,14 +23,23 @@ pub fn add_component(cwd: &Path, name: &str, description: Option<&str>) -> Resul
         component: Component {
             name: name.into(),
             description: description.unwrap_or_default().into(),
-            connects_to: vec![],
         },
     };
 
-    state.components.insert(name.into(), comp.clone());
+    let write = store.prepare_write(&store.component_path(name), &comp)?;
+    let hash = write.content_hash();
+
+    state.graph_index.nodes.push(NodeEntry {
+        name: name.into(),
+        kind: NodeKind::Component,
+        tags: vec![],
+        hash,
+    });
+
+    state.components.insert(name.into(), comp);
     validate_mutation(&state)?;
 
-    store.write_atomic(&lock, &store.component_path(name), &comp)?;
+    store.commit_batch(&lock, vec![write], vec![], Some(&state.graph_index))?;
     println!("Added component `{name}`");
     Ok(())
 }
@@ -54,24 +63,27 @@ pub fn add_connection(cwd: &Path, from: &str, to: &str) -> Result<()> {
         )));
     }
 
-    if state.components[from]
-        .component
-        .connects_to
+    let duplicate = state
+        .graph_index
+        .edges
         .iter()
-        .any(|t| t == to)
-    {
+        .any(|e| e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo);
+    if duplicate {
         return Err(Error::Validation(format!(
             "connection `{from}` → `{to}` already exists"
         )));
     }
 
-    let mut updated = state.components[from].clone();
-    updated.component.connects_to.push(to.into());
+    state.graph_index.edges.push(EdgeEntry {
+        from: from.into(),
+        to: to.into(),
+        kind: EdgeKind::ConnectsTo,
+    });
 
-    state.components.insert(from.into(), updated.clone());
     validate_mutation(&state)?;
 
-    store.write_atomic(&lock, &store.component_path(from), &updated)?;
+    // Only graph.toml changes — no node files modified.
+    store.commit_batch(&lock, vec![], vec![], Some(&state.graph_index))?;
     println!("Connected `{from}` → `{to}`");
     Ok(())
 }
@@ -94,15 +106,6 @@ pub fn rename_component(cwd: &Path, old: &str, new: &str) -> Result<()> {
         )));
     }
 
-    let affected_components: Vec<String> = state
-        .components
-        .iter()
-        .filter(|(cname, comp)| {
-            *cname != old && comp.component.connects_to.iter().any(|t| t == old)
-        })
-        .map(|(cname, _)| cname.clone())
-        .collect();
-
     let affected_decisions: Vec<String> = state
         .decisions
         .iter()
@@ -110,7 +113,7 @@ pub fn rename_component(cwd: &Path, old: &str, new: &str) -> Result<()> {
         .map(|(dname, _)| dname.clone())
         .collect();
 
-    // Apply mutation in memory
+    // Apply mutation in memory.
     let mut renamed = state
         .components
         .remove(old)
@@ -118,40 +121,61 @@ pub fn rename_component(cwd: &Path, old: &str, new: &str) -> Result<()> {
     renamed.component.name = new.into();
     state.components.insert(new.into(), renamed);
 
-    for comp in state.components.values_mut() {
-        for target in &mut comp.component.connects_to {
-            if target == old {
-                *target = new.into();
-            }
-        }
-    }
-
     for dec in state.decisions.values_mut() {
         if dec.decision.component == old {
             dec.decision.component = new.into();
         }
     }
 
+    // Update graph index: node name.
+    for node in &mut state.graph_index.nodes {
+        if node.name == old {
+            node.name = new.into();
+        }
+    }
+
+    // Update graph index: edge references.
+    for edge in &mut state.graph_index.edges {
+        if edge.from == old {
+            edge.from = new.into();
+        }
+        if edge.to == old {
+            edge.to = new.into();
+        }
+    }
+
     validate_mutation(&state)?;
 
-    // Batch commit
+    // Prepare writes.
     let mut writes = Vec::new();
-    writes.push(store.prepare_write(&store.component_path(new), &state.components[new])?);
-    for cname in &affected_components {
-        writes.push(store.prepare_write(
-            &store.component_path(cname),
-            &state.components[cname.as_str()],
-        )?);
+
+    let comp_write = store.prepare_write(&store.component_path(new), &state.components[new])?;
+    // Update hash for renamed component.
+    let new_hash = comp_write.content_hash();
+    if let Some(node) = state.graph_index.nodes.iter_mut().find(|n| n.name == new) {
+        node.hash = new_hash;
     }
+    writes.push(comp_write);
+
     for dname in &affected_decisions {
-        writes.push(store.prepare_write(
+        let dec_write = store.prepare_write(
             &store.decision_path(dname),
             &state.decisions[dname.as_str()],
-        )?);
+        )?;
+        let dec_hash = dec_write.content_hash();
+        if let Some(node) = state
+            .graph_index
+            .nodes
+            .iter_mut()
+            .find(|n| n.name == *dname)
+        {
+            node.hash = dec_hash;
+        }
+        writes.push(dec_write);
     }
 
     let removes = vec![store.component_path(old)];
-    store.commit_batch(&lock, writes, removes)?;
+    store.commit_batch(&lock, writes, removes, Some(&state.graph_index))?;
     println!("Renamed component `{old}` → `{new}`");
     Ok(())
 }
@@ -179,32 +203,19 @@ pub fn remove_component(cwd: &Path, name: &str) -> Result<()> {
         )));
     }
 
-    let affected: Vec<String> = state
-        .components
-        .iter()
-        .filter(|(comp_name, comp)| {
-            *comp_name != name && comp.component.connects_to.iter().any(|t| t == name)
-        })
-        .map(|(comp_name, _)| comp_name.clone())
-        .collect();
-
     state.components.remove(name);
-    for comp in state.components.values_mut() {
-        comp.component.connects_to.retain(|t| t != name);
-    }
+
+    // Remove node and all edges involving this component from graph index.
+    state.graph_index.nodes.retain(|n| n.name != name);
+    state
+        .graph_index
+        .edges
+        .retain(|e| e.from != name && e.to != name);
 
     validate_mutation(&state)?;
 
-    let mut writes = Vec::new();
-    for comp_name in &affected {
-        writes.push(store.prepare_write(
-            &store.component_path(comp_name),
-            &state.components[comp_name.as_str()],
-        )?);
-    }
     let removes = vec![store.component_path(name)];
-
-    store.commit_batch(&lock, writes, removes)?;
+    store.commit_batch(&lock, vec![], removes, Some(&state.graph_index))?;
     println!("Removed component `{name}`");
     Ok(())
 }
@@ -214,6 +225,7 @@ mod tests {
     use super::*;
     use crate::commands::{check, decide, init};
     use crate::store::Store;
+    use crate::store::schema::EdgeKind;
     use tempfile::TempDir;
 
     // ── add component ────────────────────────────────────────────────────
@@ -291,10 +303,27 @@ mod tests {
         assert!(comp.component.description.is_empty());
     }
 
+    #[test]
+    fn add_component_creates_graph_node() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
+
+        let store = Store::discover(tmp.path()).unwrap();
+        let state = store.load_state().unwrap();
+        assert!(
+            state
+                .graph_index
+                .nodes
+                .iter()
+                .any(|n| n.name == "auth" && n.kind == NodeKind::Component)
+        );
+    }
+
     // ── add connection ───────────────────────────────────────────────────
 
     #[test]
-    fn add_connection_links_components() {
+    fn add_connection_creates_edge() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
         add_component(tmp.path(), "auth", None).unwrap();
@@ -302,8 +331,14 @@ mod tests {
         add_connection(tmp.path(), "auth", "database").unwrap();
 
         let store = Store::discover(tmp.path()).unwrap();
-        let comp = store.read_component("auth").unwrap();
-        assert_eq!(comp.component.connects_to, vec!["database"]);
+        let state = store.load_state().unwrap();
+        assert!(
+            state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.from == "auth" && e.to == "database" && e.kind == EdgeKind::ConnectsTo)
+        );
     }
 
     #[test]
@@ -415,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn rename_component_updates_connections() {
+    fn rename_component_updates_edges() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
         add_component(tmp.path(), "auth", None).unwrap();
@@ -426,10 +461,31 @@ mod tests {
         rename_component(tmp.path(), "auth", "authentication").unwrap();
 
         let store = Store::discover(tmp.path()).unwrap();
-        let authn = store.read_component("authentication").unwrap();
-        assert_eq!(authn.component.connects_to, vec!["database"]);
-        let db = store.read_component("database").unwrap();
-        assert_eq!(db.component.connects_to, vec!["authentication"]);
+        let state = store.load_state().unwrap();
+
+        // Forward edge should be updated
+        assert!(
+            state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.from == "authentication"
+                    && e.to == "database"
+                    && e.kind == EdgeKind::ConnectsTo)
+        );
+        // Reverse edge should be updated
+        assert!(state.graph_index.edges.iter().any(|e| e.from == "database"
+            && e.to == "authentication"
+            && e.kind == EdgeKind::ConnectsTo));
+        // Old name should be gone from edges
+        assert!(
+            !state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.from == "auth" || e.to == "auth")
+        );
+
         check(tmp.path()).unwrap();
     }
 
@@ -495,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_component_cleans_up_incoming_connections() {
+    fn remove_component_cleans_up_edges() {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
         add_component(tmp.path(), "auth", None).unwrap();
@@ -507,10 +563,17 @@ mod tests {
         remove_component(tmp.path(), "database").unwrap();
 
         let store = Store::discover(tmp.path()).unwrap();
-        let auth = store.read_component("auth").unwrap();
-        assert!(auth.component.connects_to.is_empty());
-        let cache = store.read_component("cache").unwrap();
-        assert!(cache.component.connects_to.is_empty());
+        let state = store.load_state().unwrap();
+
+        // No edges should reference "database"
+        assert!(
+            !state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.from == "database" || e.to == "database")
+        );
+
         check(tmp.path()).unwrap();
     }
 }

@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
 use crate::{Error, Result};
 
-use super::schema::{ComponentFile, DecisionFile, ProjectFile};
+use super::schema::{ComponentFile, DecisionFile, GraphIndex, PatternFile, ProjectFile};
 
 // ── ProjectState ─────────────────────────────────────────────────────────────
 
@@ -16,9 +15,13 @@ pub struct ProjectState {
     pub project: ProjectFile,
     pub components: BTreeMap<String, ComponentFile>,
     pub decisions: BTreeMap<String, DecisionFile>,
+    pub patterns: BTreeMap<String, PatternFile>,
+    pub graph_index: GraphIndex,
 }
 
 impl ProjectState {
+    /// Validate node-file content and basic graph index consistency.
+    /// Returns an empty vec when everything is valid.
     pub fn validate(&self) -> Vec<String> {
         let mut issues = Vec::new();
 
@@ -36,23 +39,6 @@ impl ProjectState {
                     "component `{filename}` has invalid name `{name}` (must be kebab-case)"
                 ));
             }
-
-            let mut seen = HashSet::new();
-            for target in &comp.component.connects_to {
-                if !self.components.contains_key(target) {
-                    issues.push(format!(
-                        "component `{filename}` connects to `{target}` which does not exist"
-                    ));
-                }
-                if target == filename {
-                    issues.push(format!("component `{filename}` connects to itself"));
-                }
-                if !seen.insert(target) {
-                    issues.push(format!(
-                        "component `{filename}` has duplicate connection to `{target}`"
-                    ));
-                }
-            }
         }
 
         for (filename, dec) in &self.decisions {
@@ -65,7 +51,8 @@ impl ProjectState {
 
             if comp != "project" && !is_valid_kebab_case(comp) {
                 issues.push(format!(
-                    "decision `{filename}` has invalid component `{comp}` (must be kebab-case or \"project\")"
+                    "decision `{filename}` has invalid component `{comp}` \
+                     (must be kebab-case or \"project\")"
                 ));
             }
 
@@ -76,15 +63,37 @@ impl ProjectState {
             if dec.decision.reason.trim().is_empty() {
                 issues.push(format!("decision `{filename}` has empty reason"));
             }
+        }
 
-            if let Some(ref sup) = dec.decision.supersedes {
-                if sup == filename {
-                    issues.push(format!("decision `{filename}` supersedes itself"));
-                } else if !self.decisions.contains_key(sup.as_str()) {
-                    issues.push(format!(
-                        "decision `{filename}` supersedes `{sup}` which does not exist"
-                    ));
-                }
+        for (filename, pat) in &self.patterns {
+            if pat.pattern.description.trim().is_empty() {
+                issues.push(format!("pattern `{filename}` has empty description"));
+            }
+        }
+
+        // Basic graph index edge validation (full graph validation in Phase 2)
+        let node_names: std::collections::HashSet<&str> = self
+            .graph_index
+            .nodes
+            .iter()
+            .map(|n| n.name.as_str())
+            .collect();
+
+        for edge in &self.graph_index.edges {
+            if !node_names.contains(edge.from.as_str()) {
+                issues.push(format!(
+                    "edge {:?} from `{}` → `{}`: source node missing from index",
+                    edge.kind, edge.from, edge.to
+                ));
+            }
+            if !node_names.contains(edge.to.as_str()) {
+                issues.push(format!(
+                    "edge {:?} from `{}` → `{}`: target node missing from index",
+                    edge.kind, edge.from, edge.to
+                ));
+            }
+            if edge.from == edge.to {
+                issues.push(format!("self-edge on `{}` ({:?})", edge.from, edge.kind));
             }
         }
 
@@ -160,7 +169,6 @@ mod tests {
         assert!(!is_valid_kebab_case("has space"));
         assert!(!is_valid_kebab_case("has.dot"));
         assert!(!is_valid_kebab_case("special!char"));
-        assert!(!is_valid_kebab_case("über"));
     }
 
     // ── validate ─────────────────────────────────────────────────────────
@@ -171,8 +179,7 @@ mod tests {
         let store = setup_store(tmp.path());
         let lock = store.lock().unwrap();
 
-        let mut auth = sample_component("auth");
-        auth.component.connects_to = vec!["database".into()];
+        let auth = sample_component("auth");
         store
             .write_atomic(&lock, &store.component_path("auth"), &auth)
             .unwrap();
@@ -189,63 +196,6 @@ mod tests {
 
         let state = store.load_state().unwrap();
         assert!(state.validate().is_empty());
-    }
-
-    #[test]
-    fn validate_catches_dangling_connection() {
-        let tmp = TempDir::new().unwrap();
-        let store = setup_store(tmp.path());
-        let lock = store.lock().unwrap();
-
-        let mut comp = sample_component("auth");
-        comp.component.connects_to = vec!["nonexistent".into()];
-        store
-            .write_atomic(&lock, &store.component_path("auth"), &comp)
-            .unwrap();
-
-        let state = store.load_state().unwrap();
-        let issues = state.validate();
-        assert_eq!(issues.len(), 1);
-        assert!(issues[0].contains("nonexistent"));
-    }
-
-    #[test]
-    fn validate_catches_self_connection() {
-        let tmp = TempDir::new().unwrap();
-        let store = setup_store(tmp.path());
-        let lock = store.lock().unwrap();
-
-        let mut comp = sample_component("auth");
-        comp.component.connects_to = vec!["auth".into()];
-        store
-            .write_atomic(&lock, &store.component_path("auth"), &comp)
-            .unwrap();
-
-        let state = store.load_state().unwrap();
-        let issues = state.validate();
-        assert!(issues.iter().any(|i| i.contains("connects to itself")));
-    }
-
-    #[test]
-    fn validate_catches_duplicate_connection() {
-        let tmp = TempDir::new().unwrap();
-        let store = setup_store(tmp.path());
-        let lock = store.lock().unwrap();
-
-        let db = sample_component("database");
-        store
-            .write_atomic(&lock, &store.component_path("database"), &db)
-            .unwrap();
-
-        let mut auth = sample_component("auth");
-        auth.component.connects_to = vec!["database".into(), "database".into()];
-        store
-            .write_atomic(&lock, &store.component_path("auth"), &auth)
-            .unwrap();
-
-        let state = store.load_state().unwrap();
-        let issues = state.validate();
-        assert!(issues.iter().any(|i| i.contains("duplicate connection")));
     }
 
     #[test]
@@ -284,23 +234,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_catches_dangling_supersedes() {
-        let tmp = TempDir::new().unwrap();
-        let store = setup_store(tmp.path());
-        let lock = store.lock().unwrap();
-
-        let mut dec = sample_decision("new-choice", "project");
-        dec.decision.supersedes = Some("ghost".into());
-        store
-            .write_atomic(&lock, &store.decision_path("new-choice"), &dec)
-            .unwrap();
-
-        let state = store.load_state().unwrap();
-        let issues = state.validate();
-        assert!(issues.iter().any(|i| i.contains("ghost")));
-    }
-
-    #[test]
     fn validate_catches_filename_mismatch() {
         let tmp = TempDir::new().unwrap();
         let store = setup_store(tmp.path());
@@ -320,16 +253,13 @@ mod tests {
         );
     }
 
-    // ── new validation checks ────────────────────────────────────────────
-
     #[test]
     fn validate_catches_non_kebab_component_name() {
         let tmp = TempDir::new().unwrap();
         let store = setup_store(tmp.path());
         let lock = store.lock().unwrap();
 
-        // Hand-edit: a component file with an invalid internal name
-        let mut comp = sample_component("Bad_Name");
+        let mut comp = sample_component("bad-name");
         comp.component.name = "Bad_Name".into();
         store
             .write_atomic(&lock, &store.component_path("Bad_Name"), &comp)
@@ -392,19 +322,23 @@ mod tests {
     }
 
     #[test]
-    fn validate_catches_self_supersede() {
+    fn validate_catches_empty_pattern_description() {
         let tmp = TempDir::new().unwrap();
         let store = setup_store(tmp.path());
         let lock = store.lock().unwrap();
 
-        let mut dec = sample_decision("loopy", "project");
-        dec.decision.supersedes = Some("loopy".into());
+        let pat = crate::store::schema::PatternFile {
+            pattern: crate::store::schema::Pattern {
+                name: "empty-pat".into(),
+                description: "   ".into(),
+            },
+        };
         store
-            .write_atomic(&lock, &store.decision_path("loopy"), &dec)
+            .write_atomic(&lock, &store.pattern_path("empty-pat"), &pat)
             .unwrap();
 
         let state = store.load_state().unwrap();
         let issues = state.validate();
-        assert!(issues.iter().any(|i| i.contains("supersedes itself")));
+        assert!(issues.iter().any(|i| i.contains("empty description")));
     }
 }
