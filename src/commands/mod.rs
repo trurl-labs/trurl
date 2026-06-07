@@ -6,7 +6,9 @@ mod map;
 mod query;
 mod serve;
 
-pub use component::{add_component, add_connection, remove_component, rename_component};
+pub use component::{
+    add_component, add_connection, remove_component, remove_connection, rename_component,
+};
 pub use decision::{decide, remove_decision};
 pub use design::design;
 pub use init::init;

@@ -152,6 +152,15 @@ pub enum RemoveCommand {
         /// Decision filename (without `.toml`).
         name: String,
     },
+
+    /// Remove a connection between two components.
+    Connection {
+        /// Source component name.
+        from: String,
+
+        /// Target component name.
+        to: String,
+    },
 }
 
 pub fn run(cli: Cli) -> Result<()> {
@@ -170,6 +179,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Remove(sub) => match sub {
             RemoveCommand::Component { name } => commands::remove_component(&cwd, &name),
             RemoveCommand::Decision { name } => commands::remove_decision(&cwd, &name),
+            RemoveCommand::Connection { from, to } => commands::remove_connection(&cwd, &from, &to),
         },
         Command::Design {
             component,

@@ -1,7 +1,5 @@
 use std::path::Path;
 
-use crate::store::graph::Direction;
-use crate::store::schema::EdgeKind;
 use crate::store::{self, RecordDecisionParams};
 use crate::{Error, Result};
 
@@ -57,65 +55,14 @@ pub fn remove_decision(cwd: &Path, name: &str) -> Result<()> {
         return Err(Error::DecisionNotFound(name.into()));
     }
 
-    // Build graph for cascade analysis.
-    let graph = state.build_graph();
-    let involved = graph.edges_involving(name);
+    let cascade = state.graph.check_decision_cascade(name);
 
-    // Block: other decisions depend on this one via DependsOn.
-    let dependents: Vec<String> = involved
-        .iter()
-        .filter(|(_, e, d)| e.kind == EdgeKind::DependsOn && *d == Direction::Reverse)
-        .map(|(other, _, _)| other.to_string())
-        .collect();
-    if !dependents.is_empty() {
-        return Err(Error::CascadeBlocked(format!(
-            "decision `{name}` is depended on by: {}. \
-             Remove or update them first.",
-            dependents.join(", ")
-        )));
+    if cascade.is_blocked() {
+        return Err(Error::CascadeBlocked(cascade.blockers.join("; ")));
     }
 
-    // Block: pattern would have <2 members after removal.
-    for (other, edge, dir) in &involved {
-        if edge.kind == EdgeKind::MemberOf && *dir == Direction::Reverse {
-            let member_count = graph
-                .edges_involving(other)
-                .iter()
-                .filter(|(_, e, d)| e.kind == EdgeKind::MemberOf && *d == Direction::Forward)
-                .count();
-            if member_count <= 2 {
-                return Err(Error::CascadeBlocked(format!(
-                    "removing `{name}` would leave pattern `{other}` with \
-                     fewer than 2 members. Remove or update the pattern first."
-                )));
-            }
-        }
-    }
-
-    // Warn: incoming constrains edges (constraint source is being removed).
-    let constrainers: Vec<String> = involved
-        .iter()
-        .filter(|(_, e, d)| e.kind == EdgeKind::Constrains && *d == Direction::Reverse)
-        .map(|(other, _, _)| other.to_string())
-        .collect();
-    if !constrainers.is_empty() {
-        eprintln!(
-            "warning: removing constraint edges from: {}",
-            constrainers.join(", ")
-        );
-    }
-
-    // Warn: broken supersede chains.
-    let supersede_refs: Vec<String> = involved
-        .iter()
-        .filter(|(_, e, d)| e.kind == EdgeKind::Supersedes && *d == Direction::Reverse)
-        .map(|(other, _, _)| other.to_string())
-        .collect();
-    if !supersede_refs.is_empty() {
-        eprintln!(
-            "warning: supersede chain broken — these decisions reference `{name}`: {}",
-            supersede_refs.join(", ")
-        );
+    for warning in &cascade.warnings {
+        eprintln!("warning: {warning}");
     }
 
     // Apply removal.

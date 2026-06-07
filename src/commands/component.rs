@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use crate::store::graph::Direction;
 use crate::store::schema::{Component, ComponentFile, EdgeEntry, EdgeKind, NodeEntry, NodeKind};
 use crate::store::{self};
 use crate::{Error, Result};
@@ -175,48 +174,14 @@ pub fn remove_component(cwd: &Path, name: &str) -> Result<()> {
         return Err(Error::ComponentNotFound(name.into()));
     }
 
-    // Build graph for cascade analysis.
-    let graph = state.build_graph();
-    let involved = graph.edges_involving(name);
+    let cascade = state.graph.check_component_cascade(name);
 
-    // Block: decisions belong to this component.
-    let decisions: Vec<String> = involved
-        .iter()
-        .filter(|(_, e, d)| e.kind == EdgeKind::BelongsTo && *d == Direction::Reverse)
-        .map(|(other, _, _)| other.to_string())
-        .collect();
-    if !decisions.is_empty() {
-        return Err(Error::CascadeBlocked(format!(
-            "component `{name}` is referenced by decisions: {}. \
-             Remove or reassign them first.",
-            decisions.join(", ")
-        )));
+    if cascade.is_blocked() {
+        return Err(Error::CascadeBlocked(cascade.blockers.join("; ")));
     }
 
-    // Warn: patterns that apply to this component.
-    let patterns: Vec<String> = involved
-        .iter()
-        .filter(|(_, e, d)| e.kind == EdgeKind::AppliesTo && *d == Direction::Reverse)
-        .map(|(other, _, _)| other.to_string())
-        .collect();
-    if !patterns.is_empty() {
-        eprintln!(
-            "warning: removing pattern associations: {}",
-            patterns.join(", ")
-        );
-    }
-
-    // Warn: incoming connections from other components.
-    let incoming: Vec<String> = involved
-        .iter()
-        .filter(|(_, e, d)| e.kind == EdgeKind::ConnectsTo && *d == Direction::Reverse)
-        .map(|(other, _, _)| other.to_string())
-        .collect();
-    if !incoming.is_empty() {
-        eprintln!(
-            "warning: removing incoming connections from: {}",
-            incoming.join(", ")
-        );
+    for warning in &cascade.warnings {
+        eprintln!("warning: {warning}");
     }
 
     state.components.remove(name);
@@ -229,6 +194,31 @@ pub fn remove_component(cwd: &Path, name: &str) -> Result<()> {
     let removes = vec![store.component_path(name)];
     store.commit_with_graph(&lock, vec![], removes, &state)?;
     println!("Removed component `{name}`");
+    Ok(())
+}
+
+pub fn remove_connection(cwd: &Path, from: &str, to: &str) -> Result<()> {
+    let (store, lock, mut state) = open_store_mut(cwd)?;
+
+    let existed = state
+        .graph_index
+        .edges
+        .iter()
+        .any(|e| e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo);
+    if !existed {
+        return Err(Error::ConnectionNotFound {
+            from: from.into(),
+            to: to.into(),
+        });
+    }
+
+    state
+        .graph_index
+        .edges
+        .retain(|e| !(e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo));
+
+    store.commit_with_graph(&lock, vec![], vec![], &state)?;
+    println!("Disconnected `{from}` → `{to}`");
     Ok(())
 }
 
@@ -585,5 +575,71 @@ mod tests {
         );
 
         check(tmp.path(), false).unwrap();
+    }
+
+    // ── remove connection ───────────────────────────────────────────────
+
+    #[test]
+    fn remove_connection_deletes_edge() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
+        add_component(tmp.path(), "database", None).unwrap();
+        add_connection(tmp.path(), "auth", "database").unwrap();
+
+        remove_connection(tmp.path(), "auth", "database").unwrap();
+
+        let store = Store::discover(tmp.path()).unwrap();
+        let state = store.load_state().unwrap();
+        assert!(
+            !state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.from == "auth" && e.to == "database" && e.kind == EdgeKind::ConnectsTo)
+        );
+        check(tmp.path(), false).unwrap();
+    }
+
+    #[test]
+    fn remove_connection_rejects_nonexistent() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
+        add_component(tmp.path(), "database", None).unwrap();
+
+        let err = remove_connection(tmp.path(), "auth", "database").unwrap_err();
+        assert!(matches!(err, Error::ConnectionNotFound { .. }));
+    }
+
+    #[test]
+    fn remove_connection_preserves_reverse() {
+        let tmp = TempDir::new().unwrap();
+        init(tmp.path()).unwrap();
+        add_component(tmp.path(), "auth", None).unwrap();
+        add_component(tmp.path(), "database", None).unwrap();
+        add_connection(tmp.path(), "auth", "database").unwrap();
+        add_connection(tmp.path(), "database", "auth").unwrap();
+
+        remove_connection(tmp.path(), "auth", "database").unwrap();
+
+        let store = Store::discover(tmp.path()).unwrap();
+        let state = store.load_state().unwrap();
+        // Forward edge removed.
+        assert!(
+            !state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.from == "auth" && e.to == "database")
+        );
+        // Reverse edge preserved.
+        assert!(
+            state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.from == "database" && e.to == "auth" && e.kind == EdgeKind::ConnectsTo)
+        );
     }
 }

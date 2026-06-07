@@ -421,17 +421,9 @@ fn remove_component(state: Arc<MapState>, name: String) -> ApiResult {
         return Err(api_err(StatusCode::NOT_FOUND, "component not found"));
     }
 
-    // Cascade check: block if decisions reference this component.
-    let has_decisions = ps
-        .graph_index
-        .edges
-        .iter()
-        .any(|e| e.to == name && e.kind == EdgeKind::BelongsTo);
-    if has_decisions {
-        return Err(api_err(
-            StatusCode::CONFLICT,
-            "component has decisions — remove them first",
-        ));
+    let cascade = ps.graph.check_component_cascade(&name);
+    if cascade.is_blocked() {
+        return Err(api_err(StatusCode::CONFLICT, cascade.blockers.join("; ")));
     }
 
     ps.components.remove(&name);
@@ -451,8 +443,11 @@ fn remove_component(state: Arc<MapState>, name: String) -> ApiResult {
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     ps.rebuild_graph();
 
-    ws::broadcast(&state.ws_tx, &[WsEvent::NodeRemoved { name }]);
-    Ok(Json(json!({ "ok": true })))
+    ws::broadcast(&state.ws_tx, &[WsEvent::NodeRemoved { name: name.clone() }]);
+    Ok(Json(json!({
+        "ok": true,
+        "warnings": cascade.warnings,
+    })))
 }
 
 // ── DELETE /api/decision/:name ─────────────────────────────────────────────
@@ -475,17 +470,9 @@ fn remove_decision(state: Arc<MapState>, name: String) -> ApiResult {
         return Err(api_err(StatusCode::NOT_FOUND, "decision not found"));
     }
 
-    // Cascade: block if other decisions depend on this one.
-    let depended_on = ps
-        .graph_index
-        .edges
-        .iter()
-        .any(|e| e.to == name && e.kind == EdgeKind::DependsOn);
-    if depended_on {
-        return Err(api_err(
-            StatusCode::CONFLICT,
-            "other decisions depend on this one",
-        ));
+    let cascade = ps.graph.check_decision_cascade(&name);
+    if cascade.is_blocked() {
+        return Err(api_err(StatusCode::CONFLICT, cascade.blockers.join("; ")));
     }
 
     ps.decisions.remove(&name);
@@ -505,8 +492,11 @@ fn remove_decision(state: Arc<MapState>, name: String) -> ApiResult {
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     ps.rebuild_graph();
 
-    ws::broadcast(&state.ws_tx, &[WsEvent::NodeRemoved { name }]);
-    Ok(Json(json!({ "ok": true })))
+    ws::broadcast(&state.ws_tx, &[WsEvent::NodeRemoved { name: name.clone() }]);
+    Ok(Json(json!({
+        "ok": true,
+        "warnings": cascade.warnings,
+    })))
 }
 
 // ── DELETE /api/connection/:from/:to ───────────────────────────────────────

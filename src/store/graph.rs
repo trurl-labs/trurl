@@ -43,6 +43,25 @@ pub struct Issue {
     pub node: Option<String>,
 }
 
+/// Result of a cascade pre-flight check before removing a node.
+///
+/// Shared by CLI, MCP, and map API to enforce identical deletion rules
+/// regardless of the mutation entry point.
+#[derive(Debug, Clone)]
+pub struct CascadeResult {
+    /// Non-empty means removal is blocked. Each string explains why.
+    pub blockers: Vec<String>,
+    /// Non-blocking side-effects that will be cleaned up. Informational.
+    pub warnings: Vec<String>,
+}
+
+impl CascadeResult {
+    #[must_use]
+    pub fn is_blocked(&self) -> bool {
+        !self.blockers.is_empty()
+    }
+}
+
 // ── InMemoryGraph ───────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -275,6 +294,128 @@ impl InMemoryGraph {
             }
         }
         result
+    }
+
+    // ── Cascade checks ──────────────────────────────────────────────────
+
+    /// Pre-flight check for removing a decision. Returns blockers that
+    /// must prevent the removal and warnings about side-effects that will
+    /// be cleaned up.
+    ///
+    /// Used by the CLI, MCP server, and map API to enforce identical
+    /// cascade rules regardless of the mutation entry point.
+    #[must_use]
+    pub fn check_decision_cascade(&self, name: &str) -> CascadeResult {
+        let involved = self.edges_involving(name);
+        let mut blockers = Vec::new();
+        let mut warnings = Vec::new();
+
+        // Block: other decisions depend on this one via DependsOn.
+        let dependents: Vec<&str> = involved
+            .iter()
+            .filter(|(_, e, d)| e.kind == EdgeKind::DependsOn && *d == Direction::Reverse)
+            .map(|(other, _, _)| *other)
+            .collect();
+        if !dependents.is_empty() {
+            blockers.push(format!(
+                "decision `{name}` is depended on by: {}. \
+                 Remove or update them first.",
+                dependents.join(", ")
+            ));
+        }
+
+        // Block: pattern would have <2 members after removal.
+        for (other, edge, dir) in &involved {
+            if edge.kind == EdgeKind::MemberOf && *dir == Direction::Reverse {
+                let member_count = self.forward_edge_count(other, EdgeKind::MemberOf);
+                if member_count <= 2 {
+                    blockers.push(format!(
+                        "removing `{name}` would leave pattern `{other}` with \
+                         fewer than 2 members. Remove or update the pattern first."
+                    ));
+                }
+            }
+        }
+
+        // Warn: incoming constrains edges (constraint source is being removed).
+        let constrainers: Vec<&str> = involved
+            .iter()
+            .filter(|(_, e, d)| e.kind == EdgeKind::Constrains && *d == Direction::Reverse)
+            .map(|(other, _, _)| *other)
+            .collect();
+        if !constrainers.is_empty() {
+            warnings.push(format!(
+                "removing constraint edges from: {}",
+                constrainers.join(", ")
+            ));
+        }
+
+        // Warn: broken supersede chains.
+        let supersede_refs: Vec<&str> = involved
+            .iter()
+            .filter(|(_, e, d)| e.kind == EdgeKind::Supersedes && *d == Direction::Reverse)
+            .map(|(other, _, _)| *other)
+            .collect();
+        if !supersede_refs.is_empty() {
+            warnings.push(format!(
+                "supersede chain broken — these decisions reference `{name}`: {}",
+                supersede_refs.join(", ")
+            ));
+        }
+
+        CascadeResult { blockers, warnings }
+    }
+
+    /// Pre-flight check for removing a component. Returns blockers that
+    /// must prevent the removal and warnings about side-effects that will
+    /// be cleaned up.
+    #[must_use]
+    pub fn check_component_cascade(&self, name: &str) -> CascadeResult {
+        let involved = self.edges_involving(name);
+        let mut blockers = Vec::new();
+        let mut warnings = Vec::new();
+
+        // Block: decisions belong to this component.
+        let decisions: Vec<&str> = involved
+            .iter()
+            .filter(|(_, e, d)| e.kind == EdgeKind::BelongsTo && *d == Direction::Reverse)
+            .map(|(other, _, _)| *other)
+            .collect();
+        if !decisions.is_empty() {
+            blockers.push(format!(
+                "component `{name}` is referenced by decisions: {}. \
+                 Remove or reassign them first.",
+                decisions.join(", ")
+            ));
+        }
+
+        // Warn: patterns that apply to this component.
+        let patterns: Vec<&str> = involved
+            .iter()
+            .filter(|(_, e, d)| e.kind == EdgeKind::AppliesTo && *d == Direction::Reverse)
+            .map(|(other, _, _)| *other)
+            .collect();
+        if !patterns.is_empty() {
+            warnings.push(format!(
+                "removing pattern associations: {}",
+                patterns.join(", ")
+            ));
+        }
+
+        // Warn: incoming connections from other components.
+        let incoming: Vec<&str> = involved
+            .iter()
+            .filter(|(_, e, d)| e.kind == EdgeKind::ConnectsTo && *d == Direction::Reverse)
+            .map(|(other, _, _)| *other)
+            .collect();
+        if !incoming.is_empty() {
+            warnings.push(format!(
+                "removing incoming connections from: {}",
+                incoming.join(", ")
+            ));
+        }
+
+        CascadeResult { blockers, warnings }
     }
 
     /// Check if adding a `DependsOn` edge from → to would create a cycle.
@@ -1983,5 +2124,294 @@ mod tests {
             "should flag non-kebab decision key: {:?}",
             issues.iter().map(|i| &i.message).collect::<Vec<_>>()
         );
+    }
+
+    // ── cascade checks ──────────────────────────────────────────────────
+
+    fn cascade_graph() -> InMemoryGraph {
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: ts(),
+            nodes: vec![
+                NodeEntry {
+                    name: "project".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "p".into(),
+                },
+                NodeEntry {
+                    name: "auth".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "a".into(),
+                },
+                NodeEntry {
+                    name: "database".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "d".into(),
+                },
+                NodeEntry {
+                    name: "use-jwt".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: "1".into(),
+                },
+                NodeEntry {
+                    name: "token-expiry".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: "2".into(),
+                },
+                NodeEntry {
+                    name: "db-pool".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: "3".into(),
+                },
+                NodeEntry {
+                    name: "auth-pattern".into(),
+                    kind: NodeKind::Pattern,
+                    tags: vec![],
+                    hash: "4".into(),
+                },
+            ],
+            edges: vec![
+                EdgeEntry {
+                    from: "use-jwt".into(),
+                    to: "auth".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+                EdgeEntry {
+                    from: "token-expiry".into(),
+                    to: "auth".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+                EdgeEntry {
+                    from: "db-pool".into(),
+                    to: "database".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+                EdgeEntry {
+                    from: "token-expiry".into(),
+                    to: "use-jwt".into(),
+                    kind: EdgeKind::DependsOn,
+                },
+                EdgeEntry {
+                    from: "auth".into(),
+                    to: "database".into(),
+                    kind: EdgeKind::ConnectsTo,
+                },
+                EdgeEntry {
+                    from: "auth-pattern".into(),
+                    to: "use-jwt".into(),
+                    kind: EdgeKind::MemberOf,
+                },
+                EdgeEntry {
+                    from: "auth-pattern".into(),
+                    to: "token-expiry".into(),
+                    kind: EdgeKind::MemberOf,
+                },
+                EdgeEntry {
+                    from: "auth-pattern".into(),
+                    to: "auth".into(),
+                    kind: EdgeKind::AppliesTo,
+                },
+            ],
+        };
+
+        let mut components = BTreeMap::new();
+        for name in ["auth", "database"] {
+            components.insert(
+                name.into(),
+                ComponentFile {
+                    component: Component {
+                        name: name.into(),
+                        description: String::new(),
+                    },
+                },
+            );
+        }
+        let mut decisions = BTreeMap::new();
+        for (name, comp) in [
+            ("use-jwt", "auth"),
+            ("token-expiry", "auth"),
+            ("db-pool", "database"),
+        ] {
+            decisions.insert(
+                name.into(),
+                DecisionFile {
+                    decision: Decision {
+                        component: comp.into(),
+                        choice: name.into(),
+                        reason: "test".into(),
+                        alternatives: vec![],
+                        tags: vec![],
+                        created: ts(),
+                    },
+                },
+            );
+        }
+        let mut patterns = BTreeMap::new();
+        patterns.insert(
+            "auth-pattern".into(),
+            PatternFile {
+                pattern: Pattern {
+                    name: "Auth pattern".into(),
+                    description: "test".into(),
+                },
+            },
+        );
+
+        InMemoryGraph::build(&index, &components, &decisions, &patterns)
+    }
+
+    #[test]
+    fn cascade_decision_blocks_when_depended_on() {
+        let g = cascade_graph();
+        let r = g.check_decision_cascade("use-jwt");
+        assert!(r.is_blocked());
+        assert!(r.blockers.iter().any(|b| b.contains("token-expiry")));
+    }
+
+    #[test]
+    fn cascade_decision_blocks_when_pattern_would_shrink() {
+        let g = cascade_graph();
+        // token-expiry is a member of auth-pattern (2 members total).
+        let r = g.check_decision_cascade("token-expiry");
+        // Also blocked by nothing depending on it via DependsOn (only use-jwt has
+        // DependsOn, pointing the other way). But pattern check should block.
+        assert!(r.is_blocked());
+        assert!(
+            r.blockers
+                .iter()
+                .any(|b| b.contains("auth-pattern") && b.contains("fewer than 2"))
+        );
+    }
+
+    #[test]
+    fn cascade_decision_allows_independent() {
+        let g = cascade_graph();
+        let r = g.check_decision_cascade("db-pool");
+        assert!(!r.is_blocked());
+    }
+
+    #[test]
+    fn cascade_component_blocks_when_has_decisions() {
+        let g = cascade_graph();
+        let r = g.check_component_cascade("auth");
+        assert!(r.is_blocked());
+        assert!(
+            r.blockers
+                .iter()
+                .any(|b| b.contains("use-jwt") || b.contains("token-expiry"))
+        );
+    }
+
+    #[test]
+    fn cascade_component_warns_about_patterns_and_connections() {
+        let g = cascade_graph();
+        let r = g.check_component_cascade("database");
+        // database has no decisions belonging to it except db-pool, but
+        // db-pool's BelongsTo edge makes it blocked.
+        assert!(r.is_blocked());
+        // Also has incoming ConnectsTo from auth.
+        // Rebuild without the decision to test warnings only.
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: ts(),
+            nodes: vec![
+                NodeEntry {
+                    name: "project".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "p".into(),
+                },
+                NodeEntry {
+                    name: "auth".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "a".into(),
+                },
+                NodeEntry {
+                    name: "database".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "d".into(),
+                },
+            ],
+            edges: vec![EdgeEntry {
+                from: "auth".into(),
+                to: "database".into(),
+                kind: EdgeKind::ConnectsTo,
+            }],
+        };
+        let mut components = BTreeMap::new();
+        for name in ["auth", "database"] {
+            components.insert(
+                name.into(),
+                ComponentFile {
+                    component: Component {
+                        name: name.into(),
+                        description: String::new(),
+                    },
+                },
+            );
+        }
+        let g2 = InMemoryGraph::build(&index, &components, &BTreeMap::new(), &BTreeMap::new());
+        let r2 = g2.check_component_cascade("database");
+        assert!(!r2.is_blocked());
+        assert!(r2.warnings.iter().any(|w| w.contains("auth")));
+    }
+
+    #[test]
+    fn cascade_component_allows_empty() {
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: ts(),
+            nodes: vec![
+                NodeEntry {
+                    name: "project".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "p".into(),
+                },
+                NodeEntry {
+                    name: "orphan".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "o".into(),
+                },
+            ],
+            edges: vec![],
+        };
+        let mut components = BTreeMap::new();
+        components.insert(
+            "orphan".into(),
+            ComponentFile {
+                component: Component {
+                    name: "orphan".into(),
+                    description: String::new(),
+                },
+            },
+        );
+        let g = InMemoryGraph::build(&index, &components, &BTreeMap::new(), &BTreeMap::new());
+        let r = g.check_component_cascade("orphan");
+        assert!(!r.is_blocked());
+        assert!(r.warnings.is_empty());
+    }
+
+    #[test]
+    fn cascade_result_is_blocked_semantics() {
+        let empty = CascadeResult {
+            blockers: vec![],
+            warnings: vec!["something".into()],
+        };
+        assert!(!empty.is_blocked());
+        let blocked = CascadeResult {
+            blockers: vec!["reason".into()],
+            warnings: vec![],
+        };
+        assert!(blocked.is_blocked());
     }
 }

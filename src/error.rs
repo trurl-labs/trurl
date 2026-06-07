@@ -46,6 +46,9 @@ pub enum Error {
     #[error("connection `{from}` \u{2192} `{to}` already exists")]
     DuplicateConnection { from: String, to: String },
 
+    #[error("connection `{from}` \u{2192} `{to}` does not exist")]
+    ConnectionNotFound { from: String, to: String },
+
     #[error("{0} consistency error(s) found")]
     CheckFailed(usize),
 
