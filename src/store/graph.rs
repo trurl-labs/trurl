@@ -320,6 +320,7 @@ impl InMemoryGraph {
         self.check_belongs_to_integrity(&mut issues);
         self.check_content_integrity(&mut issues);
         self.check_name_integrity(&mut issues);
+        self.check_node_content_coherence(&mut issues);
         issues
     }
 
@@ -705,9 +706,48 @@ impl InMemoryGraph {
                 });
             }
         }
+        // Decision keys (filenames) must be kebab-case — enforced by slugify
+        // on creation, but manual edits or external tools could violate this.
+        for key in self.decisions.keys() {
+            if !is_valid_kebab_case(key) {
+                issues.push(Issue {
+                    severity: Severity::Error,
+                    message: format!("decision key `{key}` is not valid kebab-case"),
+                    node: Some(key.to_string()),
+                });
+            }
+        }
         // Pattern names are human-readable (e.g. "All persistent state uses Redis")
         // and intentionally differ from the kebab-case filename key. No key-vs-name
         // check — only content checks (empty name/description) apply.
+    }
+
+    /// Every node in the index must have matching content in the typed cache.
+    /// Catches graph.toml / node-file desync (missing files, parse failures
+    /// that were swallowed, or manual index edits).
+    fn check_node_content_coherence(&self, issues: &mut Vec<Issue>) {
+        for (name, meta) in &self.nodes {
+            // "project" is a virtual component node with no on-disk content file.
+            if name.as_ref() == "project" {
+                continue;
+            }
+            let has_content = match meta.kind {
+                NodeKind::Component => self.components.contains_key(name),
+                NodeKind::Decision => self.decisions.contains_key(name),
+                NodeKind::Pattern => self.patterns.contains_key(name),
+            };
+            if !has_content {
+                issues.push(Issue {
+                    severity: Severity::Error,
+                    message: format!(
+                        "{:?} node `{name}` exists in index but has no content \
+                         (file may be missing or unparseable)",
+                        meta.kind
+                    ),
+                    node: Some(name.to_string()),
+                });
+            }
+        }
     }
 }
 
@@ -2151,6 +2191,115 @@ mod tests {
         assert!(
             issues.is_empty(),
             "expected no issues, got: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    // ── validate: node-content coherence ─────────────────────────────────
+
+    #[test]
+    fn validate_catches_orphan_node_without_content() {
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: ts(),
+            nodes: vec![
+                NodeEntry {
+                    name: "project".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "p".into(),
+                },
+                NodeEntry {
+                    name: "ghost".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: "g".into(),
+                },
+            ],
+            edges: vec![],
+        };
+        // ghost exists in nodes but has no DecisionFile in the content map.
+        let g = InMemoryGraph::build(&index, HashMap::new(), HashMap::new(), HashMap::new());
+        let issues = g.validate();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("ghost") && i.message.contains("no content")),
+            "should flag orphan node: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn validate_allows_project_virtual_node_without_content() {
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: ts(),
+            nodes: vec![NodeEntry {
+                name: "project".into(),
+                kind: NodeKind::Component,
+                tags: vec![],
+                hash: "p".into(),
+            }],
+            edges: vec![],
+        };
+        // "project" has no ComponentFile — it's virtual. Must not error.
+        let g = InMemoryGraph::build(&index, HashMap::new(), HashMap::new(), HashMap::new());
+        let issues = g.validate();
+        assert!(
+            !issues.iter().any(|i| i.message.contains("no content")),
+            "project virtual node should be exempt: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    // ── validate: decision key kebab-case ────────────────────────────────
+
+    #[test]
+    fn validate_catches_non_kebab_decision_key() {
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: ts(),
+            nodes: vec![
+                NodeEntry {
+                    name: "project".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "p".into(),
+                },
+                NodeEntry {
+                    name: "Bad_Key".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: "b".into(),
+                },
+            ],
+            edges: vec![EdgeEntry {
+                from: "Bad_Key".into(),
+                to: "project".into(),
+                kind: EdgeKind::BelongsTo,
+            }],
+        };
+        let mut decisions = HashMap::new();
+        decisions.insert(
+            "Bad_Key".into(),
+            DecisionFile {
+                decision: Decision {
+                    component: "project".into(),
+                    choice: "test".into(),
+                    reason: "test".into(),
+                    alternatives: vec![],
+                    created: ts(),
+                },
+            },
+        );
+        let g = InMemoryGraph::build(&index, HashMap::new(), decisions, HashMap::new());
+        let issues = g.validate();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.message.contains("Bad_Key") && i.message.contains("kebab-case")),
+            "should flag non-kebab decision key: {:?}",
             issues.iter().map(|i| &i.message).collect::<Vec<_>>()
         );
     }

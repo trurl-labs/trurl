@@ -211,6 +211,8 @@ impl Store {
         // graph.toml is last (appended last to all_writes).
         for (i, (tmp_path, target)) in staged.iter().enumerate() {
             if let Err(e) = fs::rename(tmp_path, target) {
+                // Clean the failed tmp file and all remaining staged files.
+                let _ = fs::remove_file(tmp_path);
                 for (remaining, _) in staged.iter().skip(i + 1) {
                     let _ = fs::remove_file(remaining);
                 }
