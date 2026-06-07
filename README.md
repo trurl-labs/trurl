@@ -1,13 +1,17 @@
-# Trurl
+<p align="center">
+  <img src="./banner.png" alt="Trurl" height="100">
+</p>
 
-Structured architectural decisions that constrain AI code generation.
+<p align="center">
+  <b>Structured architectural decisions that constrain AI code generation.</b>
+</p>
 
-![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)
-![Rust](https://img.shields.io/badge/rust-1.95-orange?style=flat-square)
-
-[Report a vulnerability](SECURITY.md) · [Contributing](CONTRIBUTING.md)
-
----
+<p align="center">
+  <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/rust-1.95-orange?style=flat-square" alt="Rust">
+  <br>
+  <a href="SECURITY.md">Report a vulnerability</a> · <a href="CONTRIBUTING.md">Contributing</a>
+</p>
 
 ## The Problem
 
