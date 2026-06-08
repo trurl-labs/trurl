@@ -25,6 +25,11 @@ pub(super) const MIN_REASON_BYTES: usize = 10;
 /// A choice is a concise title, not a paragraph.
 pub(super) const MAX_CHOICE_BYTES: usize = 200;
 
+/// Maximum decision count at which coverage gaps still trigger.
+/// Above this, the component has enough decisions that gaps are
+/// likely intentional rather than a sign of a skipped design session.
+const COVERAGE_GAP_THRESHOLD: usize = 5;
+
 pub(super) fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     let val = args
         .get(key)
@@ -259,11 +264,55 @@ pub(crate) fn record_decision(
     // Server-side pattern detection: scan for tag overlaps across components.
     let pattern_opportunity = detect_pattern_opportunity(state, &stem);
 
+    // Coverage gap detection: if the component has few decisions and most
+    // concern areas are unexplored, the agent likely skipped get_design_prompt.
+    // This structured signal is much harder to ignore than a workflow hint.
+    let coverage_gap = if component != "project" {
+        let comp_decs = state.graph.decisions_for(component);
+        if comp_decs.len() <= COVERAGE_GAP_THRESHOLD {
+            let project_rules = state.graph.project_decisions();
+            let all_decs: Vec<&store::DecisionFile> = project_rules
+                .iter()
+                .chain(comp_decs.iter())
+                .map(|(_, d)| *d)
+                .collect();
+            let (covered, uncovered) = super::prompts::compute_concern_coverage(&all_decs);
+
+            if uncovered.len() > covered.len() {
+                serde_json::json!({
+                    "component": component,
+                    "decisions_recorded": comp_decs.len(),
+                    "concerns_covered": covered,
+                    "concerns_uncovered": uncovered,
+                    "recommended_action": {
+                        "tool": "get_design_prompt",
+                        "args": { "component": component, "mode": "full" },
+                    },
+                    "message": format!(
+                        "Component `{component}` has {} decision(s) but {} concern \
+                         areas are unexplored: {}. \
+                         Call get_design_prompt to cover them systematically.",
+                        comp_decs.len(),
+                        uncovered.len(),
+                        uncovered.join(", "),
+                    ),
+                })
+            } else {
+                Value::Null
+            }
+        } else {
+            Value::Null
+        }
+    } else {
+        Value::Null
+    };
+
     Ok(serde_json::json!({
         "name": stem,
         "path": store.decision_path(&stem).display().to_string(),
         "warnings": warnings,
         "pattern_opportunity": pattern_opportunity,
+        "coverage_gap": coverage_gap,
         "workflow": {
             "hint": "comprehension_gate",
             "decision": { "choice": choice, "reason": reason },
@@ -1211,6 +1260,98 @@ mod tests {
                 .iter()
                 .any(|w| w.as_str().unwrap().contains("no description")),
             "should warn about missing description: {warnings:?}"
+        );
+    }
+
+    // ── coverage gap detection ────────────────────────────────────────
+
+    #[test]
+    fn record_decision_flags_coverage_gap() {
+        let (_tmp, store, mut state) = setup();
+        // Record one narrow decision — covers only "Data format" concern area.
+        let args = json!({
+            "component": "auth",
+            "choice": "TOML for config files",
+            "reason": "Human-readable serialization format",
+        });
+        let result = record_decision(&store, &mut state, &args).unwrap();
+        let gap = &result["coverage_gap"];
+        assert!(
+            !gap.is_null(),
+            "1 decision with 9+ uncovered concerns should trigger coverage_gap"
+        );
+        assert_eq!(gap["component"], "auth");
+        let uncovered = gap["concerns_uncovered"].as_array().unwrap();
+        assert!(
+            uncovered.len() >= 7,
+            "most concerns should be uncovered: {uncovered:?}"
+        );
+        assert_eq!(gap["recommended_action"]["tool"], "get_design_prompt");
+    }
+
+    #[test]
+    fn record_decision_no_coverage_gap_when_well_covered() {
+        let (_tmp, store, mut state) = setup();
+        // Record decisions that cover many concern areas via keyword matching.
+        let decisions = [
+            (
+                "TOML format for all schema files",
+                "Human-readable serialization and deserialization",
+            ),
+            (
+                "Fail-closed on write errors",
+                "Never silently succeed with wrong data; graceful recovery",
+            ),
+            (
+                "Advisory file lock with flock",
+                "Concurrent write protection without deadlock risk",
+            ),
+            (
+                "BLAKE3 hash for integrity checks",
+                "Fast validation and content-addressable verification",
+            ),
+            (
+                "Sub-millisecond graph traversal",
+                "In-memory cache with latency budget under 1ms",
+            ),
+            (
+                "MCP stdio protocol boundary",
+                "External interface via JSON-RPC over standard I/O",
+            ),
+        ];
+        for (choice, reason) in decisions {
+            let args = json!({
+                "component": "auth",
+                "choice": choice,
+                "reason": reason,
+            });
+            record_decision(&store, &mut state, &args).unwrap();
+        }
+        // 6 decisions covering 6+ concern areas → gap should not trigger.
+        let last = json!({
+            "component": "auth",
+            "choice": "Token-based auth model",
+            "reason": "Stateless authentication and authorization with security tokens",
+        });
+        let result = record_decision(&store, &mut state, &last).unwrap();
+        assert!(
+            result["coverage_gap"].is_null(),
+            "well-covered component (>5 decisions, many concerns) should not trigger gap"
+        );
+    }
+
+    #[test]
+    fn record_decision_no_coverage_gap_for_project() {
+        let (_tmp, store, mut state) = setup();
+        let args = json!({
+            "component": "project",
+            "choice": "Fail-closed everywhere",
+            "reason": "Never silently succeed with wrong data",
+        });
+        let result = record_decision(&store, &mut state, &args).unwrap();
+        assert!(
+            result["coverage_gap"].is_null(),
+            "project-wide decisions should not trigger coverage_gap"
         );
     }
 }
