@@ -1,14 +1,11 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use chrono::Utc;
 use serde_json::Value;
 
 use crate::store::graph::InMemoryGraph;
 use crate::store::schema::EdgeKind;
 use crate::store::{DecisionFile, PatternFile, ProjectState};
-
-use super::advance::STALENESS_THRESHOLD_DAYS;
 
 // ── Context depth ──────────────────────────────────────────────────────────
 
@@ -65,77 +62,12 @@ pub(crate) fn get_context(
     let (covered_concerns, uncovered_concerns) =
         super::prompts::compute_concern_coverage(&coverage_decisions);
 
-    // Staleness detection: flag decisions older than the threshold.
-    let now = Utc::now();
-    let stale_decisions: Vec<Value> = component_decisions
-        .iter()
-        .filter_map(|(name, d)| {
-            let age = now.signed_duration_since(d.decision.created);
-            if age.num_days() >= STALENESS_THRESHOLD_DAYS {
-                Some(serde_json::json!({
-                    "name": name.as_ref(),
-                    "created": d.decision.created.to_rfc3339(),
-                    "age_days": age.num_days(),
-                }))
-            } else {
-                None
-            }
-        })
-        .collect();
-
     let status = if !component_decisions.is_empty() {
         "covered"
     } else if !project_decisions.is_empty() {
         "partially_covered"
     } else {
         "not_covered"
-    };
-
-    // Dynamic mode recommendation based on component state.
-    let recommended_mode = if component_decisions.is_empty() {
-        "full"
-    } else if !stale_decisions.is_empty() {
-        "review"
-    } else {
-        "quick"
-    };
-
-    let workflow = match status {
-        "covered" if stale_decisions.is_empty() => serde_json::json!({
-            "hint": "ready_to_implement",
-            "message": "Component has architectural decisions. \
-                        Use the brief as authoritative constraints.",
-        }),
-        "covered" => serde_json::json!({
-            "hint": "review_suggested",
-            "stale_decisions": stale_decisions,
-            "next": "get_design_prompt",
-            "args": { "component": component, "mode": "review" },
-            "message": format!(
-                "{} decision(s) are older than {STALENESS_THRESHOLD_DAYS} days. \
-                 Consider a review session before modifying this component.",
-                stale_decisions.len(),
-            ),
-        }),
-        "partially_covered" => serde_json::json!({
-            "hint": "design_incomplete",
-            "next": "get_design_prompt",
-            "args": { "component": component, "mode": recommended_mode },
-            "message": format!(
-                "Component `{component}` has project-wide rules but no \
-                 component-specific decisions. Call get_design_prompt \
-                 before implementing.",
-            ),
-        }),
-        _ => serde_json::json!({
-            "hint": "design_needed",
-            "next": "get_design_prompt",
-            "args": { "component": component, "mode": recommended_mode },
-            "message": format!(
-                "No decisions cover `{component}`. \
-                 Call get_design_prompt to design before implementing.",
-            ),
-        }),
     };
 
     // Full depth: include related decisions, reasoning, verbose brief.
@@ -157,6 +89,7 @@ pub(crate) fn get_context(
                 &related_decisions,
                 &transitive_deps,
                 &patterns,
+                &uncovered_concerns,
             );
 
             let mut seen: HashSet<&str> = HashSet::new();
@@ -194,7 +127,6 @@ pub(crate) fn get_context(
                 },
                 "brief": brief,
                 "status": status,
-                "workflow": workflow,
             }))
         }
         ContextDepth::Constraints => {
@@ -204,6 +136,7 @@ pub(crate) fn get_context(
                 &component_decisions,
                 &project_decisions,
                 &patterns,
+                &uncovered_concerns,
             );
 
             Ok(serde_json::json!({
@@ -217,7 +150,6 @@ pub(crate) fn get_context(
                     .collect::<Vec<_>>(),
                 "brief": brief,
                 "status": status,
-                "workflow": workflow,
             }))
         }
     }
@@ -251,22 +183,6 @@ fn project_context(
         "covered"
     };
 
-    let workflow = if project_decisions.is_empty() {
-        serde_json::json!({
-            "hint": "design_needed",
-            "next": "get_design_prompt",
-            "args": { "component": "project", "mode": "full" },
-            "message": "No project-wide decisions yet. Call get_design_prompt \
-                        to establish foundational constraints.",
-        })
-    } else {
-        serde_json::json!({
-            "hint": "ready_to_implement",
-            "message": "Project-wide rules established. \
-                        Use the brief as authoritative constraints.",
-        })
-    };
-
     serde_json::json!({
         "component": {
             "name": "project",
@@ -279,13 +195,17 @@ fn project_context(
         "related_decisions": [],
         "brief": brief,
         "status": status,
-        "workflow": workflow,
     })
 }
 
 // ── build_brief ──────────────────────────────────────────────────────────
 
 /// Format the authoritative brief that coding agents consume directly.
+///
+/// When `uncovered_concerns` outnumber the covered ones, the brief opens
+/// with a degradation warning — belt-and-suspenders for agents that
+/// bypass `advance`.
+#[allow(clippy::too_many_arguments)]
 fn build_brief(
     component: &str,
     task_description: Option<&str>,
@@ -294,8 +214,22 @@ fn build_brief(
     related_decisions: &[(&Arc<str>, &DecisionFile)],
     transitive_deps: &[(&Arc<str>, &DecisionFile)],
     patterns: &[(&Arc<str>, &PatternFile)],
+    uncovered_concerns: &[&str],
 ) -> String {
     let mut brief = String::with_capacity(512);
+
+    // Degradation warning: when more concerns are uncovered than covered,
+    // the design is incomplete and the agent should proceed with caution.
+    let covered_count = super::prompts::CONCERNS.len() - uncovered_concerns.len();
+    if uncovered_concerns.len() > covered_count {
+        brief.push_str(&format!(
+            "\u{26a0} DESIGN INCOMPLETE \u{2014} {} concern areas have no decisions:\n  {}\n\n\
+             Proceed with caution. Existing decisions below are constraints, \
+             but expect gaps.\n\n",
+            uncovered_concerns.len(),
+            uncovered_concerns.join(", "),
+        ));
+    }
 
     if let Some(task) = task_description {
         brief.push_str(&format!("TASK: {task}\n\n"));
@@ -454,32 +388,12 @@ pub(crate) fn check_pattern(state: &ProjectState, description: &str) -> Value {
         // matching query words against component names and descriptions.
         let suggested_component = suggest_component_for(state, &query_words);
 
-        let workflow = match suggested_component {
-            Some(comp) => serde_json::json!({
-                "hint": "design_needed",
-                "next": "get_design_prompt",
-                "args": { "component": comp, "mode": "full" },
-                "message": format!(
-                    "Pattern not covered. Component `{comp}` looks most \
-                     relevant — call get_design_prompt to design.",
-                ),
-            }),
-            None => serde_json::json!({
-                "hint": "design_needed",
-                "next": "add_component",
-                "message": "Pattern not covered and no existing component \
-                            matches. Call add_component first, then \
-                            get_design_prompt.",
-            }),
-        };
-
         serde_json::json!({
             "status": "not_covered",
-            "message": "No existing decisions cover this pattern. \
-                        A design session is needed before proceeding.",
+            "message": "No existing decisions cover this pattern.",
             "decisions": [],
             "patterns": [],
-            "workflow": workflow,
+            "suggested_component": suggested_component,
         })
     } else {
         serde_json::json!({
@@ -494,11 +408,6 @@ pub(crate) fn check_pattern(state: &ProjectState, description: &str) -> Value {
                 })
             }).collect::<Vec<_>>(),
             "patterns": matched_patterns,
-            "workflow": {
-                "hint": "pattern_exists",
-                "message": "Pattern covered by existing decisions. \
-                            Use get_context for the implementation brief.",
-            }
         })
     }
 }
@@ -577,24 +486,6 @@ pub(crate) fn get_architecture(state: &ProjectState) -> Value {
         .map(|(name, _)| name.as_str())
         .collect();
 
-    let workflow = if undesigned.is_empty() {
-        serde_json::json!({
-            "hint": "architecture_complete",
-            "message": "All components have architectural decisions.",
-        })
-    } else {
-        serde_json::json!({
-            "hint": "design_needed",
-            "undesigned_components": undesigned,
-            "next": "get_design_prompt",
-            "message": format!(
-                "{} component(s) have no decisions. \
-                 Call get_design_prompt for each before implementing.",
-                undesigned.len(),
-            ),
-        })
-    };
-
     serde_json::json!({
         "project": {
             "name": state.project.project.name,
@@ -603,10 +494,10 @@ pub(crate) fn get_architecture(state: &ProjectState) -> Value {
         "components": components,
         "patterns": patterns,
         "project_decisions": project_decisions,
+        "undesigned_components": undesigned,
         "total_components": state.components.len(),
         "total_decisions": state.decisions.len(),
         "total_patterns": state.patterns.len(),
-        "workflow": workflow,
     })
 }
 
@@ -659,8 +550,18 @@ fn build_brief_compact(
     component_decisions: &[(&Arc<str>, &DecisionFile)],
     project_decisions: &[(&Arc<str>, &DecisionFile)],
     patterns: &[(&Arc<str>, &PatternFile)],
+    uncovered_concerns: &[&str],
 ) -> String {
     let mut brief = String::with_capacity(256);
+
+    let covered_count = super::prompts::CONCERNS.len() - uncovered_concerns.len();
+    if uncovered_concerns.len() > covered_count {
+        brief.push_str(&format!(
+            "\u{26a0} DESIGN INCOMPLETE \u{2014} {} concern areas have no decisions:\n  {}\n\n",
+            uncovered_concerns.len(),
+            uncovered_concerns.join(", "),
+        ));
+    }
 
     if let Some(task) = task_description {
         brief.push_str(&format!("TASK: {task}\n\n"));
@@ -939,7 +840,10 @@ mod tests {
         .unwrap();
 
         let brief = result["brief"].as_str().unwrap();
-        assert!(brief.starts_with("TASK: implement token refresh\n"));
+        assert!(
+            brief.contains("TASK: implement token refresh"),
+            "brief must contain the task line"
+        );
     }
 
     // ── build_brief ─────────────────────────────────────────────────────
@@ -1223,64 +1127,48 @@ mod tests {
         assert!(words.contains(&"binding".to_string()));
     }
 
-    // ── workflow hints ─────────────────────────────────────────────────
+    // ── no workflow hints ─────────────────────────────────────────────
 
     #[test]
-    fn get_context_covered_workflow_ready() {
-        let mut state = test_state();
-        // Freshen timestamps so staleness detection doesn't fire.
-        for dec in state.decisions.values_mut() {
-            dec.decision.created = Utc::now();
-        }
-        state.rebuild_graph();
+    fn get_context_no_workflow() {
+        let state = test_state();
         let result = get_context(&state, "auth", None, ContextDepth::Full).unwrap();
+        assert!(result.get("workflow").is_none());
         assert_eq!(result["status"], "covered");
-        assert_eq!(result["workflow"]["hint"], "ready_to_implement");
     }
 
     #[test]
-    fn get_context_not_covered_workflow_suggests_design() {
+    fn get_context_constraints_no_workflow() {
         let state = test_state();
-        // "rate-limiter" has no component-specific decisions but project rules exist.
-        let result = get_context(&state, "rate-limiter", None, ContextDepth::Full).unwrap();
-        assert_eq!(result["status"], "partially_covered");
-        assert_eq!(result["workflow"]["hint"], "design_incomplete");
-        assert_eq!(result["workflow"]["next"], "get_design_prompt");
-        assert_eq!(result["workflow"]["args"]["component"], "rate-limiter");
+        let result = get_context(&state, "auth", None, ContextDepth::Constraints).unwrap();
+        assert!(result.get("workflow").is_none());
     }
 
     #[test]
-    fn check_pattern_not_covered_workflow() {
+    fn check_pattern_no_workflow() {
         let state = test_state();
-        let result = check_pattern(&state, "WebSocket notifications");
-        assert_eq!(result["status"], "not_covered");
-        assert_eq!(result["workflow"]["hint"], "design_needed");
-        // No component matches "WebSocket" → suggests add_component.
-        assert_eq!(result["workflow"]["next"], "add_component");
+        let covered = check_pattern(&state, "JWT token authentication");
+        assert_eq!(covered["status"], "covered");
+        assert!(covered.get("workflow").is_none());
+
+        let uncovered = check_pattern(&state, "WebSocket notifications");
+        assert_eq!(uncovered["status"], "not_covered");
+        assert!(uncovered.get("workflow").is_none());
     }
 
     #[test]
-    fn check_pattern_covered_workflow() {
-        let state = test_state();
-        let result = check_pattern(&state, "JWT token authentication");
-        assert_eq!(result["status"], "covered");
-        assert_eq!(result["workflow"]["hint"], "pattern_exists");
-    }
-
-    #[test]
-    fn get_architecture_shows_undesigned_components() {
+    fn get_architecture_no_workflow() {
         let state = test_state();
         let result = get_architecture(&state);
-        let wf = &result["workflow"];
-        assert_eq!(wf["hint"], "design_needed");
-        let undesigned = wf["undesigned_components"].as_array().unwrap();
-        // rate-limiter is the only component with no decisions in the fixture.
+        assert!(result.get("workflow").is_none());
+        // undesigned_components is now plain data, not nested in workflow.
+        let undesigned = result["undesigned_components"].as_array().unwrap();
         assert_eq!(undesigned.len(), 1);
         assert_eq!(undesigned[0], "rate-limiter");
     }
 
     #[test]
-    fn project_context_no_decisions_workflow() {
+    fn project_context_no_workflow() {
         use crate::store::schema::*;
         let state = ProjectState::new(
             ProjectFile {
@@ -1301,8 +1189,37 @@ mod tests {
             },
         );
         let result = get_context(&state, "project", None, ContextDepth::Full).unwrap();
-        assert_eq!(result["workflow"]["hint"], "design_needed");
-        assert_eq!(result["workflow"]["next"], "get_design_prompt");
+        assert!(result.get("workflow").is_none());
+    }
+
+    // ── degradation warning ───────────────────────────────────────────
+
+    #[test]
+    fn brief_has_degradation_warning_when_incomplete() {
+        let state = test_state();
+        // rate-limiter has no component decisions → only project rules cover
+        // Error handling. 9 of 10 concerns uncovered → degradation warning.
+        let result = get_context(&state, "rate-limiter", None, ContextDepth::Full).unwrap();
+        let brief = result["brief"].as_str().unwrap();
+        assert!(
+            brief.contains("DESIGN INCOMPLETE"),
+            "brief should warn about incomplete design: {brief}"
+        );
+    }
+
+    #[test]
+    fn brief_no_degradation_warning_when_covered() {
+        let state = test_state();
+        // auth has 1 decision + project rule. Whether that's enough depends
+        // on keyword coverage, but with just 2 decisions most concerns are
+        // uncovered. We need a well-covered component to test no-warning.
+        // Use the project context instead — no concern coverage applies.
+        let result = get_context(&state, "project", None, ContextDepth::Full).unwrap();
+        let brief = result["brief"].as_str().unwrap();
+        assert!(
+            !brief.contains("DESIGN INCOMPLETE"),
+            "project brief should not have degradation warning"
+        );
     }
 
     // ── concern coverage ──────────────────────────────────────────────
@@ -1378,39 +1295,6 @@ mod tests {
         );
     }
 
-    // ── staleness detection ───────────────────────────────────────────
-
-    #[test]
-    fn old_decisions_flagged_as_stale() {
-        use chrono::TimeZone;
-
-        let mut state = test_state();
-        // Set use-jwt's timestamp to 6 months ago.
-        if let Some(dec) = state.decisions.get_mut("use-jwt") {
-            dec.decision.created = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
-        }
-        state.rebuild_graph();
-
-        let result = get_context(&state, "auth", None, ContextDepth::Full).unwrap();
-        let wf = &result["workflow"];
-        assert_eq!(
-            wf["hint"], "review_suggested",
-            "stale decisions should trigger review_suggested"
-        );
-        let stale = wf["stale_decisions"].as_array().unwrap();
-        assert!(stale.iter().any(|d| d["name"] == "use-jwt"));
-    }
-
-    // ── mode recommendation ───────────────────────────────────────────
-
-    #[test]
-    fn mode_recommendation_full_for_empty_component() {
-        let state = test_state();
-        // rate-limiter has no component-specific decisions.
-        let result = get_context(&state, "rate-limiter", None, ContextDepth::Full).unwrap();
-        assert_eq!(result["workflow"]["args"]["mode"], "full");
-    }
-
     // ── component suggestion ──────────────────────────────────────────
 
     #[test]
@@ -1419,15 +1303,15 @@ mod tests {
         // "rate limiting" should match the "rate-limiter" component by name.
         let result = check_pattern(&state, "rate limiting for API requests");
         assert_eq!(result["status"], "not_covered");
-        assert_eq!(result["workflow"]["args"]["component"], "rate-limiter");
+        assert_eq!(result["suggested_component"], "rate-limiter");
     }
 
     #[test]
-    fn check_pattern_suggests_add_component_when_no_match() {
+    fn check_pattern_suggests_null_when_no_match() {
         let state = test_state();
         // "WebSocket notifications" matches no existing component.
         let result = check_pattern(&state, "WebSocket notification streaming");
         assert_eq!(result["status"], "not_covered");
-        assert_eq!(result["workflow"]["next"], "add_component");
+        assert!(result["suggested_component"].is_null());
     }
 }
