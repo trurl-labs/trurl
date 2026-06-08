@@ -346,8 +346,8 @@ impl Store {
         let write = self.prepare_write(&self.decision_path(&stem), &decision)?;
         let hash = write.content_hash();
 
-        // Snapshot for rollback on commit failure.
-        let graph_snapshot = state.graph_index.clone();
+        // Checkpoint for rollback — O(1) since all mutations are appends.
+        let checkpoint = state.graph_checkpoint();
 
         state.graph_index.nodes.push(NodeEntry {
             name: stem.clone(),
@@ -390,7 +390,7 @@ impl Store {
 
         if let Err(e) = self.commit_with_graph(lock, vec![write], vec![], state) {
             state.decisions.remove(&stem);
-            state.graph_index = graph_snapshot;
+            state.rollback_graph(checkpoint);
             return Err(e);
         }
 

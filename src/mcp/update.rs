@@ -34,14 +34,8 @@ pub(crate) fn remove_decision(
 
     // Execute removal.
     let lock = store.lock().map_err(|e| e.to_string())?;
-    let graph_snapshot = state.graph_index.clone();
     let decision_snapshot = state.decisions.remove(name);
-
-    state.graph_index.nodes.retain(|n| n.name != name);
-    state
-        .graph_index
-        .edges
-        .retain(|e| e.from != name && e.to != name);
+    let removed = state.remove_graph_node(name);
 
     let removes = vec![store.decision_path(name)];
 
@@ -50,7 +44,7 @@ pub(crate) fn remove_decision(
         if let Some(dec) = decision_snapshot {
             state.decisions.insert(name.into(), dec);
         }
-        state.graph_index = graph_snapshot;
+        state.restore_graph_node(removed);
         return Err(e.to_string());
     }
 
@@ -124,18 +118,16 @@ fn amend_decision(
         .map_err(|e| e.to_string())?;
     let hash = write.content_hash();
 
-    // Validation passed — now mutate state. Snapshot first for rollback.
-    let graph_snapshot = state.graph_index.clone();
-
+    // Mutate state. Save only the affected hash for rollback.
     state.decisions.insert(name.into(), amended);
-    if let Some(node) = state.graph_index.nodes.iter_mut().find(|n| n.name == name) {
-        node.hash = hash;
-    }
+    let old_hash = state.update_node_hash(name, hash);
 
     if let Err(e) = store.commit_with_graph(&lock, vec![write], vec![], state) {
-        // Full rollback: both decision content and graph index.
+        // Rollback: restore decision content and node hash.
         state.decisions.insert(name.into(), old_dec);
-        state.graph_index = graph_snapshot;
+        if let Some(h) = old_hash {
+            state.update_node_hash(name, h);
+        }
         return Err(e.to_string());
     }
 

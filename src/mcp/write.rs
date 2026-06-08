@@ -276,7 +276,8 @@ pub(crate) fn record_pattern(
         .map_err(|e| e.to_string())?;
     let hash = write.content_hash();
 
-    let graph_snapshot = state.graph_index.clone();
+    // Checkpoint for rollback — O(1) since all mutations are appends.
+    let checkpoint = state.graph_checkpoint();
 
     // Add pattern node.
     state.graph_index.nodes.push(NodeEntry {
@@ -308,7 +309,7 @@ pub(crate) fn record_pattern(
 
     if let Err(e) = store.commit_with_graph(&lock, vec![write], vec![], state) {
         state.patterns.remove(&slug);
-        state.graph_index = graph_snapshot;
+        state.rollback_graph(checkpoint);
         return Err(e.to_string());
     }
 
