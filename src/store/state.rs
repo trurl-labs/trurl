@@ -80,6 +80,17 @@ impl ProjectState {
     ) -> InMemoryGraph {
         InMemoryGraph::build(graph_index, components, decisions, patterns)
     }
+
+    /// Check if a name is in use by any node type (component, decision,
+    /// pattern, or virtual). Prevents cross-type collisions that would
+    /// produce confusing graph integrity errors during commit.
+    #[must_use]
+    pub fn is_node_name_taken(&self, name: &str) -> bool {
+        is_reserved_node_name(name)
+            || self.components.contains_key(name)
+            || self.decisions.contains_key(name)
+            || self.patterns.contains_key(name)
+    }
 }
 
 // ── Name validation ─────────────────────────────────────────────────────────
@@ -158,28 +169,25 @@ pub fn slugify(input: &str) -> String {
 const MAX_DEDUP_SUFFIX: u32 = 10_000;
 
 /// Derive a unique decision filename stem from `base`, appending `-2`,
-/// `-3`, … if `base` already exists in `decisions`. Reserved names
-/// (e.g. `"project"`) are disambiguated with a `-decision` suffix.
-pub fn unique_decision_stem(
-    decisions: &BTreeMap<String, DecisionFile>,
-    base: &str,
-) -> Result<String> {
+/// `-3`, … if `base` collides with any existing node. Checks components,
+/// decisions, patterns, and reserved names to prevent cross-type
+/// collisions that would produce confusing graph integrity errors.
+pub fn unique_decision_stem(state: &ProjectState, base: &str) -> Result<String> {
     if is_reserved_node_name(base) {
-        // Disambiguate immediately — "project" is the virtual node.
         let candidate = format!("{base}-decision");
-        return unique_decision_stem(decisions, &candidate);
+        return unique_decision_stem(state, &candidate);
     }
-    if !decisions.contains_key(base) {
+    if !state.is_node_name_taken(base) {
         return Ok(base.to_string());
     }
     for n in 2..=MAX_DEDUP_SUFFIX {
         let candidate = format!("{base}-{n}");
-        if !decisions.contains_key(&candidate) {
+        if !state.is_node_name_taken(&candidate) {
             return Ok(candidate);
         }
     }
     Err(Error::Validation(format!(
-        "too many decisions with stem `{base}` (limit: {MAX_DEDUP_SUFFIX})"
+        "too many nodes with stem `{base}` (limit: {MAX_DEDUP_SUFFIX})"
     )))
 }
 
@@ -210,6 +218,7 @@ pub(super) fn list_toml_stems(dir: &Path) -> Result<Vec<String>> {
 mod tests {
     use super::*;
     use crate::store::graph::Severity;
+    
     use crate::store::testing::*;
 
     use tempfile::TempDir;
@@ -289,46 +298,119 @@ mod tests {
 
     // ── unique_decision_stem ────────────────────────────────────────────
 
+    fn empty_state() -> ProjectState {
+        use crate::store::schema::*;
+        use chrono::Utc;
+        ProjectState::new(
+            ProjectFile {
+                trurl_version: FORMAT_VERSION.into(),
+                project: Project {
+                    name: "test".into(),
+                    description: String::new(),
+                },
+            },
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            GraphIndex {
+                version: 1,
+                rebuilt: Utc::now(),
+                nodes: vec![],
+                edges: vec![],
+            },
+        )
+    }
+
     #[test]
     fn unique_stem_no_collision() {
-        let decisions = BTreeMap::new();
+        let state = empty_state();
         assert_eq!(
-            unique_decision_stem(&decisions, "use-redis").unwrap(),
+            unique_decision_stem(&state, "use-redis").unwrap(),
             "use-redis"
         );
     }
 
     #[test]
     fn unique_stem_appends_suffix_on_collision() {
-        let mut decisions = BTreeMap::new();
-        decisions.insert("use-redis".into(), sample_decision("use-redis", "project"));
+        let mut state = empty_state();
+        state
+            .decisions
+            .insert("use-redis".into(), sample_decision("use-redis", "project"));
         assert_eq!(
-            unique_decision_stem(&decisions, "use-redis").unwrap(),
+            unique_decision_stem(&state, "use-redis").unwrap(),
             "use-redis-2"
         );
     }
 
     #[test]
     fn unique_stem_skips_taken_suffixes() {
-        let mut decisions = BTreeMap::new();
+        let mut state = empty_state();
         for name in &["use-redis", "use-redis-2", "use-redis-3"] {
-            decisions.insert(name.to_string(), sample_decision(name, "project"));
+            state
+                .decisions
+                .insert(name.to_string(), sample_decision(name, "project"));
         }
         assert_eq!(
-            unique_decision_stem(&decisions, "use-redis").unwrap(),
+            unique_decision_stem(&state, "use-redis").unwrap(),
             "use-redis-4"
         );
     }
 
     #[test]
     fn unique_stem_disambiguates_reserved_name() {
-        let decisions = BTreeMap::new();
-        let stem = unique_decision_stem(&decisions, "project").unwrap();
+        let state = empty_state();
+        let stem = unique_decision_stem(&state, "project").unwrap();
         assert_ne!(stem, "project", "reserved name must be disambiguated");
         assert!(
             stem.starts_with("project-"),
             "disambiguated stem should keep the prefix: {stem}"
         );
+    }
+
+    #[test]
+    fn unique_stem_avoids_component_collision() {
+        let mut state = empty_state();
+        state
+            .components
+            .insert("auth".into(), sample_component("auth"));
+        // "auth" is taken by a component — stem must be suffixed.
+        assert_eq!(unique_decision_stem(&state, "auth").unwrap(), "auth-2");
+    }
+
+    #[test]
+    fn unique_stem_avoids_pattern_collision() {
+        let mut state = empty_state();
+        state.patterns.insert(
+            "state-in-redis".into(),
+            crate::store::schema::PatternFile {
+                pattern: crate::store::schema::Pattern {
+                    name: "state-in-redis".into(),
+                    description: "test".into(),
+                },
+            },
+        );
+        assert_eq!(
+            unique_decision_stem(&state, "state-in-redis").unwrap(),
+            "state-in-redis-2"
+        );
+    }
+
+    #[test]
+    fn is_node_name_taken_across_types() {
+        let mut state = empty_state();
+        assert!(state.is_node_name_taken("project"), "reserved");
+        assert!(!state.is_node_name_taken("auth"));
+
+        state
+            .components
+            .insert("auth".into(), sample_component("auth"));
+        assert!(state.is_node_name_taken("auth"), "component");
+        assert!(!state.is_node_name_taken("use-jwt"));
+
+        state
+            .decisions
+            .insert("use-jwt".into(), sample_decision("use-jwt", "auth"));
+        assert!(state.is_node_name_taken("use-jwt"), "decision");
     }
 
     // ── validate ─────────────────────────────────────────────────────────

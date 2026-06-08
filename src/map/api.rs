@@ -247,6 +247,12 @@ fn write_component(state: Arc<MapState>, body: CreateComponent) -> ApiResult {
     if ps.components.contains_key(&body.name) {
         return Err(api_err(StatusCode::CONFLICT, "component already exists"));
     }
+    if ps.decisions.contains_key(&body.name) || ps.patterns.contains_key(&body.name) {
+        return Err(api_err(
+            StatusCode::CONFLICT,
+            "name conflicts with an existing decision or pattern",
+        ));
+    }
 
     let comp = crate::store::schema::ComponentFile {
         component: crate::store::schema::Component {

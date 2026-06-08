@@ -330,7 +330,7 @@ impl Store {
         state: &mut ProjectState,
         params: RecordDecisionParams<'_>,
     ) -> Result<String> {
-        let stem = unique_decision_stem(&state.decisions, &slugify(params.choice))?;
+        let stem = unique_decision_stem(state, &slugify(params.choice))?;
 
         let decision = DecisionFile {
             decision: Decision {

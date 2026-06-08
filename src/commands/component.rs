@@ -19,6 +19,11 @@ pub fn add_component(cwd: &Path, name: &str, description: Option<&str>) -> Resul
     if state.components.contains_key(name) {
         return Err(Error::ComponentExists(name.into()));
     }
+    if state.decisions.contains_key(name) || state.patterns.contains_key(name) {
+        return Err(Error::Validation(format!(
+            "name `{name}` is already used by an existing decision or pattern"
+        )));
+    }
 
     let comp = ComponentFile {
         component: Component {
@@ -96,6 +101,11 @@ pub fn rename_component(cwd: &Path, old: &str, new: &str) -> Result<()> {
     }
     if state.components.contains_key(new) {
         return Err(Error::ComponentExists(new.into()));
+    }
+    if state.decisions.contains_key(new) || state.patterns.contains_key(new) {
+        return Err(Error::Validation(format!(
+            "name `{new}` is already used by an existing decision or pattern"
+        )));
     }
 
     let affected_decisions: Vec<String> = state

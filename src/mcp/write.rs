@@ -256,6 +256,11 @@ pub(crate) fn record_pattern(
     if state.patterns.contains_key(&slug) {
         return Err(format!("pattern `{slug}` already exists"));
     }
+    if state.components.contains_key(&slug) || state.decisions.contains_key(&slug) {
+        return Err(format!(
+            "name `{slug}` is already used by an existing component or decision"
+        ));
+    }
 
     let lock = store.lock().map_err(|e| e.to_string())?;
 
