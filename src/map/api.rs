@@ -133,8 +133,7 @@ pub(crate) async fn get_graph(State(state): State<Arc<MapState>>) -> ApiResult {
             let applied_components: Vec<&str> =
                 graph.components_for_pattern(slug).into_iter().collect();
             json!({
-                "name": pat.pattern.name,
-                "slug": slug,
+                "name": slug,
                 "description": pat.pattern.description,
                 "decisions": member_decisions,
                 "components": applied_components,
@@ -410,34 +409,41 @@ fn amend_decision(state: Arc<MapState>, name: String, body: AmendDecision) -> Ap
     }
 
     let mut ps = state.write_project_state();
-    let dec = ps
-        .decisions
-        .get(&name)
-        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "decision not found"))?;
 
-    // Snapshot for rollback.
-    let old_choice = dec.decision.choice.clone();
-    let old_reason = dec.decision.reason.clone();
-    let old_tags = dec.decision.tags.clone();
+    // Apply changes within a scoped mutable borrow, returning old values for rollback.
+    let (old_choice, old_reason, old_tags) = {
+        let dec = ps
+            .decisions
+            .get_mut(&name)
+            .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "decision not found"))?;
+        let old = (
+            dec.decision.choice.clone(),
+            dec.decision.reason.clone(),
+            dec.decision.tags.clone(),
+        );
+        if let Some(ref c) = body.choice {
+            dec.decision.choice.clone_from(c);
+        }
+        if let Some(ref r) = body.reason {
+            dec.decision.reason.clone_from(r);
+        }
+        if let Some(ref t) = body.tags {
+            dec.decision.tags.clone_from(t);
+        }
+        old
+    };
+    // Mutable borrow on ps.decisions released — other fields accessible again.
+
     let graph_snapshot = ps.graph_index.clone();
-
-    let dec = ps
-        .decisions
-        .get_mut(&name)
-        .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "decision disappeared"))?;
-    if let Some(ref c) = body.choice {
-        dec.decision.choice = c.clone();
-    }
-    if let Some(ref r) = body.reason {
-        dec.decision.reason = r.clone();
-    }
-    if let Some(ref t) = body.tags {
-        dec.decision.tags = t.clone();
-    }
 
     let write = state
         .store
-        .prepare_write(&state.store.decision_path(&name), dec)
+        .prepare_write(
+            &state.store.decision_path(&name),
+            ps.decisions
+                .get(&name)
+                .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "decision not found"))?,
+        )
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let hash = write.content_hash();
 

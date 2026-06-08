@@ -30,7 +30,6 @@ export interface DecisionNode {
 
 export interface PatternNode {
   name: string;
-  slug: string;
   description: string;
   decisions: string[];
   components: string[];

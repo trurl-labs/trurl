@@ -49,7 +49,7 @@ export class Graph {
     }
 
     for (const p of snap.patterns) {
-      this.patterns.set(p.slug, p);
+      this.patterns.set(p.name, p);
     }
 
     for (const e of snap.edges) {

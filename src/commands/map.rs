@@ -93,9 +93,10 @@ fn detach_server(store: &crate::store::Store, port: Option<u16>) -> Result<()> {
         }
 
         if let Ok(content) = fs::read_to_string(&log_path)
-            && let Some(line) = content.lines().find(|l| l.contains("map \u{2192}")) {
-                break line.to_string();
-            }
+            && let Some(line) = content.lines().find(|l| l.contains("map \u{2192}"))
+        {
+            break line.to_string();
+        }
 
         std::thread::sleep(Duration::from_millis(50));
     };

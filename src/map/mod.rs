@@ -27,6 +27,7 @@ use axum::middleware;
 use axum::routing::{delete, get, post, put};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::broadcast;
+use tower_http::cors::CorsLayer;
 
 use crate::store::{ProjectState, STATE_DIR, Store};
 
@@ -139,7 +140,8 @@ pub(crate) async fn start(
                 HeaderValue::from_static("DENY"),
             ),
         )
-        .layer(DefaultBodyLimit::max(1_048_576)); // 1 MB
+        .layer(DefaultBodyLimit::max(1_048_576)) // 1 MB
+        .layer(CorsLayer::new()); // Deny all cross-origin requests (spec: §Security).
 
     // Bind to 127.0.0.1 only — never 0.0.0.0.
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port.unwrap_or(0)));
@@ -212,10 +214,12 @@ fn spawn_watcher(state: Arc<MapState>) -> Option<RecommendedWatcher> {
 
     let watcher_store = Store::at(store_root);
 
-    thread::Builder::new()
+    if let Err(e) = thread::Builder::new()
         .name("trurl-map-watcher".into())
         .spawn(move || watcher_loop(&watcher_store, &state, &state_dir, rx))
-        .ok();
+    {
+        eprintln!("trurl: failed to spawn watcher thread: {e}");
+    }
 
     eprintln!("trurl: file watcher active");
     Some(watcher)
