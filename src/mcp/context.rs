@@ -1,21 +1,44 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use chrono::Utc;
 use serde_json::Value;
 
 use crate::store::graph::InMemoryGraph;
 use crate::store::schema::EdgeKind;
 use crate::store::{DecisionFile, PatternFile, ProjectState};
 
+// ── Context depth ──────────────────────────────────────────────────────────
+
+/// Controls how much detail `get_context` returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContextDepth {
+    /// Full context: decisions with reasoning, related decisions,
+    /// transitive dependencies, patterns, and verbose brief.
+    Full,
+    /// Constraints only: choice text (no reasoning/alternatives),
+    /// no related decisions, compact brief. ~60-70% fewer tokens.
+    Constraints,
+}
+
+/// Decisions older than this are flagged as stale in the response,
+/// suggesting a review session.
+const STALENESS_THRESHOLD_DAYS: i64 = 90;
+
 // ── get_context ──────────────────────────────────────────────────────────
 
 /// Assemble a tailored spec for a component: its decisions, project-wide
 /// rules, related decisions from connected components, applicable patterns,
 /// and a pre-assembled authoritative brief.
+///
+/// `depth` controls verbosity: `Full` returns everything; `Constraints`
+/// strips reasoning, alternatives, and related decisions for ~60-70%
+/// fewer tokens on mid-implementation constraint checks.
 pub(crate) fn get_context(
     state: &ProjectState,
     component: &str,
     task_description: Option<&str>,
+    depth: ContextDepth,
 ) -> Result<Value, String> {
     let graph = &state.graph;
 
@@ -33,43 +56,32 @@ pub(crate) fn get_context(
 
     let component_decisions = graph.decisions_for(component);
     let project_decisions = graph.project_decisions();
-    let related_decisions = graph.related_decisions(component);
     let patterns = graph.patterns_for(component);
 
-    // Transitive depends_on traversal (BFS, max depth 3).
-    // Surfaces constraints from non-adjacent decisions that the component's
-    // decisions transitively depend on.
-    let seeds: Vec<&str> = component_decisions
+    // Concern coverage: project rules + component decisions.
+    let coverage_decisions: Vec<&crate::store::DecisionFile> = project_decisions
         .iter()
-        .map(|(name, _)| name.as_ref())
+        .chain(component_decisions.iter())
+        .map(|(_, d)| *d)
         .collect();
-    let transitive_deps = graph.transitive_depends_on(&seeds, 3);
+    let (covered_concerns, uncovered_concerns) =
+        super::prompts::compute_concern_coverage(&coverage_decisions);
 
-    let brief = build_brief(
-        component,
-        task_description,
-        &component_decisions,
-        &project_decisions,
-        &related_decisions,
-        &transitive_deps,
-        &patterns,
-    );
-
-    // Merge related + transitive, deduplicated by name.
-    let mut seen: HashSet<&str> = HashSet::new();
-    // Exclude the component's own decisions from the combined list.
-    for (name, _) in &component_decisions {
-        seen.insert(name);
-    }
-    let combined_related: Vec<String> = related_decisions
+    // Staleness detection: flag decisions older than the threshold.
+    let now = Utc::now();
+    let stale_decisions: Vec<Value> = component_decisions
         .iter()
-        .chain(transitive_deps.iter())
-        .filter(|(name, _)| seen.insert(name))
-        .map(|(_, d)| {
-            format!(
-                "{}: {} ({})",
-                d.decision.component, d.decision.choice, d.decision.reason
-            )
+        .filter_map(|(name, d)| {
+            let age = now.signed_duration_since(d.decision.created);
+            if age.num_days() >= STALENESS_THRESHOLD_DAYS {
+                Some(serde_json::json!({
+                    "name": name.as_ref(),
+                    "created": d.decision.created.to_rfc3339(),
+                    "age_days": age.num_days(),
+                }))
+            } else {
+                None
+            }
         })
         .collect();
 
@@ -81,25 +93,36 @@ pub(crate) fn get_context(
         "not_covered"
     };
 
-    // Concern coverage: project rules + component decisions.
-    let coverage_decisions: Vec<&crate::store::DecisionFile> = project_decisions
-        .iter()
-        .chain(component_decisions.iter())
-        .map(|(_, d)| *d)
-        .collect();
-    let (covered_concerns, uncovered_concerns) =
-        super::prompts::compute_concern_coverage(&coverage_decisions);
+    // Dynamic mode recommendation based on component state.
+    let recommended_mode = if component_decisions.is_empty() {
+        "full"
+    } else if !stale_decisions.is_empty() {
+        "review"
+    } else {
+        "quick"
+    };
 
     let workflow = match status {
-        "covered" => serde_json::json!({
+        "covered" if stale_decisions.is_empty() => serde_json::json!({
             "hint": "ready_to_implement",
             "message": "Component has architectural decisions. \
                         Use the brief as authoritative constraints.",
         }),
+        "covered" => serde_json::json!({
+            "hint": "review_suggested",
+            "stale_decisions": stale_decisions,
+            "next": "get_design_prompt",
+            "args": { "component": component, "mode": "review" },
+            "message": format!(
+                "{} decision(s) are older than {STALENESS_THRESHOLD_DAYS} days. \
+                 Consider a review session before modifying this component.",
+                stale_decisions.len(),
+            ),
+        }),
         "partially_covered" => serde_json::json!({
             "hint": "design_incomplete",
             "next": "get_design_prompt",
-            "args": { "component": component, "mode": "full" },
+            "args": { "component": component, "mode": recommended_mode },
             "message": format!(
                 "Component `{component}` has project-wide rules but no \
                  component-specific decisions. Call get_design_prompt \
@@ -109,7 +132,7 @@ pub(crate) fn get_context(
         _ => serde_json::json!({
             "hint": "design_needed",
             "next": "get_design_prompt",
-            "args": { "component": component, "mode": "full" },
+            "args": { "component": component, "mode": recommended_mode },
             "message": format!(
                 "No decisions cover `{component}`. \
                  Call get_design_prompt to design before implementing.",
@@ -117,27 +140,89 @@ pub(crate) fn get_context(
         }),
     };
 
-    Ok(serde_json::json!({
-        "component": {
-            "name": comp.component.name,
-            "description": comp.component.description,
-            "connects_to": connects_to,
-            "connects_from": connects_from,
-        },
-        "decisions": format_decisions(&component_decisions),
-        "project_rules": project_decisions.iter()
-            .map(|(_, d)| &d.decision.choice)
-            .collect::<Vec<_>>(),
-        "patterns": format_patterns(&patterns),
-        "related_decisions": combined_related,
-        "concern_coverage": {
-            "covered": covered_concerns,
-            "uncovered": uncovered_concerns,
-        },
-        "brief": brief,
-        "status": status,
-        "workflow": workflow,
-    }))
+    // Full depth: include related decisions, reasoning, verbose brief.
+    // Constraints depth: compact for mid-implementation checks.
+    match depth {
+        ContextDepth::Full => {
+            let related_decisions = graph.related_decisions(component);
+            let seeds: Vec<&str> = component_decisions
+                .iter()
+                .map(|(name, _)| name.as_ref())
+                .collect();
+            let transitive_deps = graph.transitive_depends_on(&seeds, 3);
+
+            let brief = build_brief(
+                component,
+                task_description,
+                &component_decisions,
+                &project_decisions,
+                &related_decisions,
+                &transitive_deps,
+                &patterns,
+            );
+
+            let mut seen: HashSet<&str> = HashSet::new();
+            for (name, _) in &component_decisions {
+                seen.insert(name);
+            }
+            let combined_related: Vec<String> = related_decisions
+                .iter()
+                .chain(transitive_deps.iter())
+                .filter(|(name, _)| seen.insert(name))
+                .map(|(_, d)| {
+                    format!(
+                        "{}: {} ({})",
+                        d.decision.component, d.decision.choice, d.decision.reason
+                    )
+                })
+                .collect();
+
+            Ok(serde_json::json!({
+                "component": {
+                    "name": comp.component.name,
+                    "description": comp.component.description,
+                    "connects_to": connects_to,
+                    "connects_from": connects_from,
+                },
+                "decisions": format_decisions(&component_decisions),
+                "project_rules": project_decisions.iter()
+                    .map(|(_, d)| &d.decision.choice)
+                    .collect::<Vec<_>>(),
+                "patterns": format_patterns(&patterns),
+                "related_decisions": combined_related,
+                "concern_coverage": {
+                    "covered": covered_concerns,
+                    "uncovered": uncovered_concerns,
+                },
+                "brief": brief,
+                "status": status,
+                "workflow": workflow,
+            }))
+        }
+        ContextDepth::Constraints => {
+            let brief = build_brief_compact(
+                component,
+                task_description,
+                &component_decisions,
+                &project_decisions,
+                &patterns,
+            );
+
+            Ok(serde_json::json!({
+                "component": { "name": comp.component.name },
+                "decisions": format_decisions_compact(&component_decisions),
+                "project_rules": project_decisions.iter()
+                    .map(|(_, d)| &d.decision.choice)
+                    .collect::<Vec<_>>(),
+                "patterns": patterns.iter()
+                    .map(|(name, _)| name.as_ref())
+                    .collect::<Vec<_>>(),
+                "brief": brief,
+                "status": status,
+                "workflow": workflow,
+            }))
+        }
+    }
 }
 
 fn project_context(
@@ -536,6 +621,63 @@ fn format_patterns(patterns: &[(&Arc<str>, &PatternFile)]) -> Vec<Value> {
         .collect()
 }
 
+/// Compact decision format: name + choice only, no reasoning.
+fn format_decisions_compact(decisions: &[(&Arc<str>, &DecisionFile)]) -> Vec<Value> {
+    decisions
+        .iter()
+        .map(|(name, d)| {
+            serde_json::json!({
+                "name": name.as_ref(),
+                "choice": d.decision.choice,
+            })
+        })
+        .collect()
+}
+
+/// Token-efficient brief: constraint list without reasoning, dependencies,
+/// or related decisions. For mid-implementation constraint checks where the
+/// agent already knows the rationale.
+fn build_brief_compact(
+    component: &str,
+    task_description: Option<&str>,
+    component_decisions: &[(&Arc<str>, &DecisionFile)],
+    project_decisions: &[(&Arc<str>, &DecisionFile)],
+    patterns: &[(&Arc<str>, &PatternFile)],
+) -> String {
+    let mut brief = String::with_capacity(256);
+
+    if let Some(task) = task_description {
+        brief.push_str(&format!("TASK: {task}\n\n"));
+    }
+
+    if !project_decisions.is_empty() {
+        brief.push_str("RULES:\n");
+        for (_, d) in project_decisions {
+            brief.push_str(&format!("- {}\n", d.decision.choice));
+        }
+        brief.push('\n');
+    }
+
+    if !patterns.is_empty() {
+        brief.push_str("PATTERNS:\n");
+        for (name, _) in patterns {
+            brief.push_str(&format!("- {}\n", name.as_ref()));
+        }
+        brief.push('\n');
+    }
+
+    brief.push_str(&format!("CONSTRAINTS ({component}):\n"));
+    if component_decisions.is_empty() {
+        brief.push_str("- (none)\n");
+    } else {
+        for (_, d) in component_decisions {
+            brief.push_str(&format!("- {}\n", d.decision.choice));
+        }
+    }
+
+    brief
+}
+
 fn extract_words(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_alphanumeric())
         .filter(|w| w.len() >= 3)
@@ -637,7 +779,7 @@ mod tests {
     #[test]
     fn get_context_returns_component_info() {
         let state = test_state();
-        let result = get_context(&state, "auth", None).unwrap();
+        let result = get_context(&state, "auth", None, ContextDepth::Full).unwrap();
 
         assert_eq!(result["component"]["name"], "auth");
         assert_eq!(result["component"]["connects_to"][0], "database");
@@ -647,7 +789,7 @@ mod tests {
     #[test]
     fn get_context_includes_reverse_connections() {
         let state = test_state();
-        let result = get_context(&state, "database", None).unwrap();
+        let result = get_context(&state, "database", None, ContextDepth::Full).unwrap();
 
         let connects_from = result["component"]["connects_from"].as_array().unwrap();
         let names: Vec<&str> = connects_from.iter().map(|v| v.as_str().unwrap()).collect();
@@ -658,7 +800,7 @@ mod tests {
     #[test]
     fn get_context_includes_project_rules() {
         let state = test_state();
-        let result = get_context(&state, "auth", None).unwrap();
+        let result = get_context(&state, "auth", None, ContextDepth::Full).unwrap();
 
         let rules = result["project_rules"].as_array().unwrap();
         assert_eq!(rules.len(), 1);
@@ -668,7 +810,7 @@ mod tests {
     #[test]
     fn get_context_includes_related_decisions() {
         let state = test_state();
-        let result = get_context(&state, "auth", None).unwrap();
+        let result = get_context(&state, "auth", None, ContextDepth::Full).unwrap();
 
         let related = result["related_decisions"].as_array().unwrap();
         assert!(!related.is_empty());
@@ -680,7 +822,7 @@ mod tests {
     #[test]
     fn get_context_includes_patterns_field() {
         let state = test_state();
-        let result = get_context(&state, "auth", None).unwrap();
+        let result = get_context(&state, "auth", None, ContextDepth::Full).unwrap();
         // Empty patterns for this fixture, but field must exist.
         let patterns = result["patterns"].as_array().unwrap();
         assert!(patterns.is_empty());
@@ -700,7 +842,7 @@ mod tests {
             .nodes
             .retain(|n| n.kind == NodeKind::Component);
         state.rebuild_graph();
-        let result = get_context(&state, "auth", None).unwrap();
+        let result = get_context(&state, "auth", None, ContextDepth::Full).unwrap();
         assert_eq!(result["status"], "not_covered");
     }
 
@@ -708,21 +850,21 @@ mod tests {
     fn get_context_partially_covered_with_only_project_rules() {
         let state = test_state();
         // rate-limiter has no component-specific decisions but project has rules.
-        let result = get_context(&state, "rate-limiter", None).unwrap();
+        let result = get_context(&state, "rate-limiter", None, ContextDepth::Full).unwrap();
         assert_eq!(result["status"], "partially_covered");
     }
 
     #[test]
     fn get_context_rejects_nonexistent_component() {
         let state = test_state();
-        let err = get_context(&state, "nonexistent", None).unwrap_err();
+        let err = get_context(&state, "nonexistent", None, ContextDepth::Full).unwrap_err();
         assert!(err.contains("does not exist"));
     }
 
     #[test]
     fn get_context_for_project() {
         let state = test_state();
-        let result = get_context(&state, "project", None).unwrap();
+        let result = get_context(&state, "project", None, ContextDepth::Full).unwrap();
 
         assert_eq!(result["component"]["name"], "project");
         assert_eq!(result["status"], "covered");
@@ -733,7 +875,13 @@ mod tests {
     #[test]
     fn get_context_includes_task_in_brief() {
         let state = test_state();
-        let result = get_context(&state, "auth", Some("implement token refresh")).unwrap();
+        let result = get_context(
+            &state,
+            "auth",
+            Some("implement token refresh"),
+            ContextDepth::Full,
+        )
+        .unwrap();
 
         let brief = result["brief"].as_str().unwrap();
         assert!(brief.starts_with("TASK: implement token refresh\n"));
@@ -744,7 +892,7 @@ mod tests {
     #[test]
     fn brief_has_when_uncertain() {
         let state = test_state();
-        let result = get_context(&state, "auth", None).unwrap();
+        let result = get_context(&state, "auth", None, ContextDepth::Full).unwrap();
         let brief = result["brief"].as_str().unwrap();
 
         assert!(brief.contains("WHEN UNCERTAIN:"));
@@ -755,7 +903,7 @@ mod tests {
     #[test]
     fn brief_has_override_policy() {
         let state = test_state();
-        let result = get_context(&state, "auth", None).unwrap();
+        let result = get_context(&state, "auth", None, ContextDepth::Full).unwrap();
         let brief = result["brief"].as_str().unwrap();
 
         assert!(brief.contains("OVERRIDE POLICY:"));
@@ -766,7 +914,7 @@ mod tests {
     #[test]
     fn brief_has_rules_section() {
         let state = test_state();
-        let result = get_context(&state, "auth", None).unwrap();
+        let result = get_context(&state, "auth", None, ContextDepth::Full).unwrap();
         let brief = result["brief"].as_str().unwrap();
 
         assert!(brief.contains("RULES (inviolable"));
@@ -813,7 +961,7 @@ mod tests {
         });
         state.rebuild_graph();
 
-        let result = get_context(&state, "auth", None).unwrap();
+        let result = get_context(&state, "auth", None, ContextDepth::Full).unwrap();
         let brief = result["brief"].as_str().unwrap();
 
         assert!(
@@ -1024,8 +1172,13 @@ mod tests {
 
     #[test]
     fn get_context_covered_workflow_ready() {
-        let state = test_state();
-        let result = get_context(&state, "auth", None).unwrap();
+        let mut state = test_state();
+        // Freshen timestamps so staleness detection doesn't fire.
+        for dec in state.decisions.values_mut() {
+            dec.decision.created = Utc::now();
+        }
+        state.rebuild_graph();
+        let result = get_context(&state, "auth", None, ContextDepth::Full).unwrap();
         assert_eq!(result["status"], "covered");
         assert_eq!(result["workflow"]["hint"], "ready_to_implement");
     }
@@ -1034,7 +1187,7 @@ mod tests {
     fn get_context_not_covered_workflow_suggests_design() {
         let state = test_state();
         // "rate-limiter" has no component-specific decisions but project rules exist.
-        let result = get_context(&state, "rate-limiter", None).unwrap();
+        let result = get_context(&state, "rate-limiter", None, ContextDepth::Full).unwrap();
         assert_eq!(result["status"], "partially_covered");
         assert_eq!(result["workflow"]["hint"], "design_incomplete");
         assert_eq!(result["workflow"]["next"], "get_design_prompt");
@@ -1091,7 +1244,7 @@ mod tests {
                 edges: vec![],
             },
         );
-        let result = get_context(&state, "project", None).unwrap();
+        let result = get_context(&state, "project", None, ContextDepth::Full).unwrap();
         assert_eq!(result["workflow"]["hint"], "design_needed");
         assert_eq!(result["workflow"]["next"], "get_design_prompt");
     }
@@ -1101,7 +1254,7 @@ mod tests {
     #[test]
     fn get_context_includes_concern_coverage() {
         let state = test_state();
-        let result = get_context(&state, "auth", None).unwrap();
+        let result = get_context(&state, "auth", None, ContextDepth::Full).unwrap();
         let coverage = &result["concern_coverage"];
         assert!(coverage["covered"].is_array());
         assert!(coverage["uncovered"].is_array());
@@ -1127,5 +1280,78 @@ mod tests {
         assert!(auth["concern_coverage"]["covered"].is_number());
         assert!(auth["concern_coverage"]["uncovered"].is_number());
         assert!(auth["concern_coverage"]["uncovered_concerns"].is_array());
+    }
+
+    // ── context depth ─────────────────────────────────────────────────
+
+    #[test]
+    fn constraints_depth_omits_reasoning() {
+        let state = test_state();
+        let result = get_context(&state, "auth", None, ContextDepth::Constraints).unwrap();
+        // Decisions should have name + choice but no reason.
+        let decisions = result["decisions"].as_array().unwrap();
+        assert!(!decisions.is_empty());
+        assert!(decisions[0].get("name").is_some());
+        assert!(decisions[0].get("choice").is_some());
+        assert!(
+            decisions[0].get("reason").is_none(),
+            "constraints depth must omit reasoning"
+        );
+    }
+
+    #[test]
+    fn constraints_depth_omits_related_decisions() {
+        let state = test_state();
+        let result = get_context(&state, "auth", None, ContextDepth::Constraints).unwrap();
+        assert!(
+            result.get("related_decisions").is_none(),
+            "constraints depth must omit related_decisions"
+        );
+    }
+
+    #[test]
+    fn constraints_depth_has_compact_brief() {
+        let state = test_state();
+        let full = get_context(&state, "auth", None, ContextDepth::Full).unwrap();
+        let compact = get_context(&state, "auth", None, ContextDepth::Constraints).unwrap();
+        let full_len = full["brief"].as_str().unwrap().len();
+        let compact_len = compact["brief"].as_str().unwrap().len();
+        assert!(
+            compact_len < full_len,
+            "compact brief ({compact_len}) must be shorter than full ({full_len})"
+        );
+    }
+
+    // ── staleness detection ───────────────────────────────────────────
+
+    #[test]
+    fn old_decisions_flagged_as_stale() {
+        use chrono::TimeZone;
+
+        let mut state = test_state();
+        // Set use-jwt's timestamp to 6 months ago.
+        if let Some(dec) = state.decisions.get_mut("use-jwt") {
+            dec.decision.created = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        }
+        state.rebuild_graph();
+
+        let result = get_context(&state, "auth", None, ContextDepth::Full).unwrap();
+        let wf = &result["workflow"];
+        assert_eq!(
+            wf["hint"], "review_suggested",
+            "stale decisions should trigger review_suggested"
+        );
+        let stale = wf["stale_decisions"].as_array().unwrap();
+        assert!(stale.iter().any(|d| d["name"] == "use-jwt"));
+    }
+
+    // ── mode recommendation ───────────────────────────────────────────
+
+    #[test]
+    fn mode_recommendation_full_for_empty_component() {
+        let state = test_state();
+        // rate-limiter has no component-specific decisions.
+        let result = get_context(&state, "rate-limiter", None, ContextDepth::Full).unwrap();
+        assert_eq!(result["workflow"]["args"]["mode"], "full");
     }
 }

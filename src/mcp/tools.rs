@@ -23,7 +23,8 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
                     components, and an authoritative brief for coding agents. \
                     WORKFLOW: If status is \"not_covered\", call get_design_prompt \
                     before implementing. If \"covered\", use the brief as \
-                    authoritative constraints.",
+                    authoritative constraints. Use depth=\"constraints\" for \
+                    token-efficient mid-implementation checks.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -34,6 +35,13 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
                         "task": {
                             "type": "string",
                             "description": "Optional current coding task description."
+                        },
+                        "depth": {
+                            "type": "string",
+                            "enum": ["full", "constraints"],
+                            "description": "full (default): complete context with reasoning. \
+                                constraints: choice text only, compact brief, no related \
+                                decisions. 60-70% fewer tokens for mid-implementation checks."
                         }
                     },
                     "required": ["component"]
@@ -342,7 +350,11 @@ fn dispatch_get_context(state: &ProjectState, args: &Value) -> Value {
         None => return tool_error("missing required parameter: component"),
     };
     let task = args.get("task").and_then(|v| v.as_str());
-    match context::get_context(state, component, task) {
+    let depth = match args.get("depth").and_then(|v| v.as_str()) {
+        Some("constraints") => context::ContextDepth::Constraints,
+        _ => context::ContextDepth::Full,
+    };
+    match context::get_context(state, component, task, depth) {
         Ok(result) => tool_result(&result),
         Err(msg) => tool_error(&msg),
     }

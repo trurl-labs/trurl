@@ -310,7 +310,7 @@ pub(crate) fn build_design_prompt(
         return Err(format!("component `{component}` does not exist"));
     }
 
-    let ctx = context::get_context(state, component, task)?;
+    let ctx = context::get_context(state, component, task, context::ContextDepth::Full)?;
 
     let instructions = match mode {
         DesignMode::Full => build_full_instructions(graph, component, task),
