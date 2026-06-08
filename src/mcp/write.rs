@@ -321,6 +321,119 @@ pub(crate) fn record_pattern(
     }))
 }
 
+// ── add_component ──────────────────────────────────────────────────────────
+
+pub(crate) fn add_component(
+    store: &Store,
+    state: &mut store::ProjectState,
+    args: &Value,
+) -> Result<Value, String> {
+    let name = require_str(args, "name")?;
+    let description = opt_str(args, "description")?.unwrap_or_default();
+
+    if !store::is_valid_kebab_case(name) {
+        return Err(format!(
+            "invalid component name `{name}` — must be kebab-case"
+        ));
+    }
+    if store::is_reserved_node_name(name) {
+        return Err(format!("`{name}` is reserved"));
+    }
+    if state.components.contains_key(name) {
+        return Err(format!("component `{name}` already exists"));
+    }
+    if state.is_node_name_taken(name) {
+        return Err(format!(
+            "name `{name}` is already used by an existing decision or pattern"
+        ));
+    }
+
+    let comp = store::ComponentFile {
+        component: store::schema::Component {
+            name: name.into(),
+            description: description.into(),
+        },
+    };
+
+    let write = store
+        .prepare_write(&store.component_path(name), &comp)
+        .map_err(|e| e.to_string())?;
+    let hash = write.content_hash();
+
+    let lock = store.lock().map_err(|e| e.to_string())?;
+
+    let checkpoint = state.graph_checkpoint();
+    state.graph_index.nodes.push(NodeEntry {
+        name: name.into(),
+        kind: NodeKind::Component,
+        tags: vec![],
+        hash,
+    });
+    state.components.insert(name.into(), comp);
+
+    if let Err(e) = store.commit_with_graph(&lock, vec![write], vec![], state) {
+        state.rollback_graph(checkpoint);
+        state.components.remove(name);
+        return Err(e.to_string());
+    }
+    state.rebuild_graph();
+
+    Ok(serde_json::json!({
+        "name": name,
+        "path": store.component_path(name).display().to_string(),
+    }))
+}
+
+// ── add_connection ─────────────────────────────────────────────────────────
+
+pub(crate) fn add_connection(
+    store: &Store,
+    state: &mut store::ProjectState,
+    args: &Value,
+) -> Result<Value, String> {
+    let from = require_str(args, "from")?;
+    let to = require_str(args, "to")?;
+
+    if !state.components.contains_key(from) {
+        return Err(format!("source component `{from}` does not exist"));
+    }
+    if !state.components.contains_key(to) {
+        return Err(format!("target component `{to}` does not exist"));
+    }
+    if from == to {
+        return Err(format!("component `{from}` cannot connect to itself"));
+    }
+
+    let duplicate = state
+        .graph_index
+        .edges
+        .iter()
+        .any(|e| e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo);
+    if duplicate {
+        return Err(format!("connection `{from}` → `{to}` already exists"));
+    }
+
+    let lock = store.lock().map_err(|e| e.to_string())?;
+
+    let checkpoint = state.graph_checkpoint();
+    state.graph_index.edges.push(EdgeEntry {
+        from: from.into(),
+        to: to.into(),
+        kind: EdgeKind::ConnectsTo,
+    });
+
+    if let Err(e) = store.commit_with_graph(&lock, vec![], vec![], state) {
+        state.rollback_graph(checkpoint);
+        return Err(e.to_string());
+    }
+    state.rebuild_graph();
+
+    Ok(serde_json::json!({
+        "from": from,
+        "to": to,
+    }))
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -545,5 +658,103 @@ mod tests {
         });
         let err = record_pattern(&store, &mut state, &args).unwrap_err();
         assert!(err.contains("does not exist"));
+    }
+
+    // ── add_component ──────────────────────────────────────────────────
+
+    #[test]
+    fn add_component_basic() {
+        let (_tmp, store, mut state) = setup();
+        let args = json!({ "name": "rate-limiter", "description": "Per-key rate limiting" });
+        let result = add_component(&store, &mut state, &args).unwrap();
+        assert_eq!(result["name"], "rate-limiter");
+        assert!(state.components.contains_key("rate-limiter"));
+    }
+
+    #[test]
+    fn add_component_without_description() {
+        let (_tmp, store, mut state) = setup();
+        let args = json!({ "name": "cache" });
+        let result = add_component(&store, &mut state, &args).unwrap();
+        assert_eq!(result["name"], "cache");
+        let comp = state.components.get("cache").unwrap();
+        assert!(comp.component.description.is_empty());
+    }
+
+    #[test]
+    fn add_component_rejects_duplicate() {
+        let (_tmp, store, mut state) = setup();
+        let err = add_component(&store, &mut state, &json!({ "name": "auth" })).unwrap_err();
+        assert!(err.contains("already exists"));
+    }
+
+    #[test]
+    fn add_component_rejects_invalid_name() {
+        let (_tmp, store, mut state) = setup();
+        let err = add_component(&store, &mut state, &json!({ "name": "Not-Valid" })).unwrap_err();
+        assert!(err.contains("kebab-case"));
+    }
+
+    #[test]
+    fn add_component_rejects_reserved_name() {
+        let (_tmp, store, mut state) = setup();
+        let err = add_component(&store, &mut state, &json!({ "name": "project" })).unwrap_err();
+        assert!(err.contains("reserved"));
+    }
+
+    // ── add_connection ─────────────────────────────────────────────────
+
+    #[test]
+    fn add_connection_basic() {
+        let (_tmp, store, mut state) = setup();
+        let args = json!({ "from": "auth", "to": "database" });
+        let result = add_connection(&store, &mut state, &args).unwrap();
+        assert_eq!(result["from"], "auth");
+        assert_eq!(result["to"], "database");
+        assert!(
+            state
+                .graph_index
+                .edges
+                .iter()
+                .any(|e| e.from == "auth" && e.to == "database" && e.kind == EdgeKind::ConnectsTo)
+        );
+    }
+
+    #[test]
+    fn add_connection_rejects_nonexistent_source() {
+        let (_tmp, store, mut state) = setup();
+        let err = add_connection(
+            &store,
+            &mut state,
+            &json!({ "from": "ghost", "to": "auth" }),
+        )
+        .unwrap_err();
+        assert!(err.contains("ghost"));
+    }
+
+    #[test]
+    fn add_connection_rejects_self_connection() {
+        let (_tmp, store, mut state) = setup();
+        let err = add_connection(&store, &mut state, &json!({ "from": "auth", "to": "auth" }))
+            .unwrap_err();
+        assert!(err.contains("cannot connect to itself"));
+    }
+
+    #[test]
+    fn add_connection_rejects_duplicate() {
+        let (_tmp, store, mut state) = setup();
+        add_connection(
+            &store,
+            &mut state,
+            &json!({ "from": "auth", "to": "database" }),
+        )
+        .unwrap();
+        let err = add_connection(
+            &store,
+            &mut state,
+            &json!({ "from": "auth", "to": "database" }),
+        )
+        .unwrap_err();
+        assert!(err.contains("already exists"));
     }
 }

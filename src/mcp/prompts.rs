@@ -120,12 +120,30 @@ fn build_full_instructions(graph: &InMemoryGraph, component: &str, task: Option<
          - What components does it interact with?\n\
          After each answer, call record_decision with tag \"scope\".\n\n\
          PHASE 2 — TECHNICAL CHOICES:\n\
-         For each non-obvious decision this component needs:\n\
+         Systematically explore each relevant concern area. For every concern\n\
+         that applies to this component, ask the user to decide:\n\n\
+         CONCERN CHECKLIST (skip only the clearly irrelevant ones):\n\
+         - Data format & serialization\n\
+         - Error handling & failure modes\n\
+         - Concurrency & locking strategy\n\
+         - Integrity & validation rules\n\
+         - Performance constraints & targets\n\
+         - External interfaces & API boundaries\n\
+         - Security boundaries & trust model\n\
+         - Storage, caching, or persistence\n\
+         - Key dependencies & coupling decisions\n\
+         - Migration & versioning strategy\n\n\
+         For each concern:\n\
          - Present 2-3 viable options with trade-offs\n\
          - Ask the user to choose\n\
          - Call record_decision\n\
          - Then ask: \"In your own words, what does this mean for [connected component]?\"\n\
          If the user's answer is thin, explain the implication and ask again.\n\n\
+         DEPTH CHECK — after every 2-3 decisions, ask:\n\
+         \"Are there other architectural choices about [component] we haven't captured yet?\"\n\
+         Continue until the user says they're done. Aim for 5-15 decisions per\n\
+         component in a full design session. Three decisions almost certainly\n\
+         means important choices are still implicit.\n\n\
          PHASE 3 — PATTERN RECOGNITION:\n\
          After 3+ decisions, check if they form a pattern with existing decisions.\n\
          If yes, present: \"These decisions together mean [X]. Record as a pattern?\"\n\
@@ -190,7 +208,24 @@ fn build_learn_instructions(graph: &InMemoryGraph, component: &str) -> String {
     let patterns = graph.patterns_for(component);
 
     if decisions.is_empty() {
-        out.push_str("No decisions recorded for this component yet.\n");
+        out.push_str(
+            "No decisions recorded for this component yet.\n\n\
+             This component exists in the codebase but has no architectural decisions\n\
+             captured. Probe for implicit decisions that are embedded in the code:\n\n\
+             Ask the user about each of these (skip clearly irrelevant ones):\n\
+             - What data format does this component use, and why?\n\
+             - How does it handle errors and failure modes?\n\
+             - What concurrency or locking strategy does it use?\n\
+             - What integrity or validation rules does it enforce?\n\
+             - What are its performance constraints?\n\
+             - What are its external interfaces?\n\
+             - What security boundaries does it respect?\n\
+             - What are its key dependencies, and why those?\n\n\
+             For each answer that reveals an architectural choice, call record_decision.\n\
+             After each decision, ask \"What else?\" until the user says they're done.\n\
+             Learning IS capturing — these are decisions that already exist in the code\n\
+             but haven't been made explicit.\n",
+        );
         return out;
     }
 
@@ -222,7 +257,12 @@ fn build_learn_instructions(graph: &InMemoryGraph, component: &str) -> String {
 
     out.push_str(
         "If the user says \"actually, this should be different\", call \
-         update_decision with mode=\"supersede\".\n\
+         update_decision with mode=\"supersede\".\n\n\
+         AFTER ALL DECISIONS REVIEWED:\n\
+         Ask: \"Are there architectural decisions about this component that exist\n\
+         in the code but haven't been captured here? Common areas: error handling,\n\
+         concurrency, data formats, performance constraints, security boundaries.\"\n\
+         For each new decision identified, call record_decision.\n\n\
          Learning IS the output. Do not proceed to implementation.\n",
     );
 
@@ -432,6 +472,19 @@ mod tests {
     }
 
     #[test]
+    fn full_mode_has_concern_checklist() {
+        let state = test_state();
+        let result = build_design_prompt(&state, "auth", None, DesignMode::Full).unwrap();
+        let instructions = result["system_instructions"].as_str().unwrap();
+
+        assert!(instructions.contains("CONCERN CHECKLIST"));
+        assert!(instructions.contains("Error handling"));
+        assert!(instructions.contains("Concurrency"));
+        assert!(instructions.contains("Security boundaries"));
+        assert!(instructions.contains("DEPTH CHECK"));
+    }
+
+    #[test]
     fn quick_mode_compact() {
         let state = test_state();
         let result = build_design_prompt(&state, "auth", None, DesignMode::Quick).unwrap();
@@ -499,5 +552,20 @@ mod tests {
         let result = build_design_prompt(&state, "database", None, DesignMode::Learn).unwrap();
         let instructions = result["system_instructions"].as_str().unwrap();
         assert!(instructions.contains("No decisions recorded"));
+        assert!(
+            instructions.contains("Probe for implicit decisions"),
+            "empty learn mode should guide the agent to probe for unrecorded decisions"
+        );
+    }
+
+    #[test]
+    fn learn_mode_probes_for_missing_decisions() {
+        let state = test_state();
+        let result = build_design_prompt(&state, "auth", None, DesignMode::Learn).unwrap();
+        let instructions = result["system_instructions"].as_str().unwrap();
+        assert!(
+            instructions.contains("AFTER ALL DECISIONS REVIEWED"),
+            "learn mode should ask about unrecorded decisions after reviewing existing ones"
+        );
     }
 }

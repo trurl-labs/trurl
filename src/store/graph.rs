@@ -323,14 +323,14 @@ impl InMemoryGraph {
                 result.push((key, dec));
             }
             if depth < max_depth
-                && let Some(edges) = self.forward.get(node) {
-                    for edge in edges {
-                        if edge.kind == EdgeKind::DependsOn && visited.insert(edge.target.as_ref())
-                        {
-                            queue.push_back((edge.target.as_ref(), depth + 1));
-                        }
+                && let Some(edges) = self.forward.get(node)
+            {
+                for edge in edges {
+                    if edge.kind == EdgeKind::DependsOn && visited.insert(edge.target.as_ref()) {
+                        queue.push_back((edge.target.as_ref(), depth + 1));
                     }
                 }
+            }
         }
 
         result

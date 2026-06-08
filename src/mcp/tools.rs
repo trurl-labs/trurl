@@ -212,6 +212,45 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
                     },
                     "required": ["component", "mode"]
                 }
+            },
+            {
+                "name": "add_component",
+                "description": "Add a new component to the architecture graph. \
+                    Use this before recording decisions for a component that \
+                    doesn't exist yet.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Kebab-case component name (e.g. 'rate-limiter')."
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "One-line description of the component's role."
+                        }
+                    },
+                    "required": ["name"]
+                }
+            },
+            {
+                "name": "add_connection",
+                "description": "Add a directional connection between two components. \
+                    Represents data or control flow.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "from": {
+                            "type": "string",
+                            "description": "Source component name."
+                        },
+                        "to": {
+                            "type": "string",
+                            "description": "Target component name."
+                        }
+                    },
+                    "required": ["from", "to"]
+                }
             }
         ]
     })
@@ -229,7 +268,12 @@ pub(crate) fn tool_list() -> &'static Value {
 pub(crate) fn is_write_tool(name: &str) -> bool {
     matches!(
         name,
-        "record_decision" | "record_pattern" | "remove_decision" | "update_decision"
+        "record_decision"
+            | "record_pattern"
+            | "remove_decision"
+            | "update_decision"
+            | "add_component"
+            | "add_connection"
     )
 }
 
@@ -263,6 +307,8 @@ pub(crate) fn call_write_tool(
         "record_pattern" => write::record_pattern(store, state, args),
         "remove_decision" => update::remove_decision(store, state, args),
         "update_decision" => update::update_decision(store, state, args),
+        "add_component" => write::add_component(store, state, args),
+        "add_connection" => write::add_connection(store, state, args),
         _ => unreachable!("is_write_tool gate prevents unknown tools here"),
     };
     match result {
@@ -351,6 +397,8 @@ mod tests {
         assert!(names.contains(&"remove_decision"));
         assert!(names.contains(&"update_decision"));
         assert!(names.contains(&"get_design_prompt"));
+        assert!(names.contains(&"add_component"));
+        assert!(names.contains(&"add_connection"));
     }
 
     #[test]
@@ -397,6 +445,8 @@ mod tests {
         assert!(is_write_tool("record_pattern"));
         assert!(is_write_tool("remove_decision"));
         assert!(is_write_tool("update_decision"));
+        assert!(is_write_tool("add_component"));
+        assert!(is_write_tool("add_connection"));
 
         // Read tools.
         assert!(!is_write_tool("get_context"));
