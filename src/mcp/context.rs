@@ -81,6 +81,33 @@ pub(crate) fn get_context(
         "not_covered"
     };
 
+    let workflow = match status {
+        "covered" => serde_json::json!({
+            "hint": "ready_to_implement",
+            "message": "Component has architectural decisions. \
+                        Use the brief as authoritative constraints.",
+        }),
+        "partially_covered" => serde_json::json!({
+            "hint": "design_incomplete",
+            "next": "get_design_prompt",
+            "args": { "component": component, "mode": "full" },
+            "message": format!(
+                "Component `{component}` has project-wide rules but no \
+                 component-specific decisions. Call get_design_prompt \
+                 before implementing.",
+            ),
+        }),
+        _ => serde_json::json!({
+            "hint": "design_needed",
+            "next": "get_design_prompt",
+            "args": { "component": component, "mode": "full" },
+            "message": format!(
+                "No decisions cover `{component}`. \
+                 Call get_design_prompt to design before implementing.",
+            ),
+        }),
+    };
+
     Ok(serde_json::json!({
         "component": {
             "name": comp.component.name,
@@ -96,6 +123,7 @@ pub(crate) fn get_context(
         "related_decisions": combined_related,
         "brief": brief,
         "status": status,
+        "workflow": workflow,
     }))
 }
 
@@ -127,6 +155,22 @@ fn project_context(
         "covered"
     };
 
+    let workflow = if project_decisions.is_empty() {
+        serde_json::json!({
+            "hint": "design_needed",
+            "next": "get_design_prompt",
+            "args": { "component": "project", "mode": "full" },
+            "message": "No project-wide decisions yet. Call get_design_prompt \
+                        to establish foundational constraints.",
+        })
+    } else {
+        serde_json::json!({
+            "hint": "ready_to_implement",
+            "message": "Project-wide rules established. \
+                        Use the brief as authoritative constraints.",
+        })
+    };
+
     serde_json::json!({
         "component": {
             "name": "project",
@@ -139,6 +183,7 @@ fn project_context(
         "related_decisions": [],
         "brief": brief,
         "status": status,
+        "workflow": workflow,
     })
 }
 
@@ -315,6 +360,12 @@ pub(crate) fn check_pattern(state: &ProjectState, description: &str) -> Value {
                         A design session is needed before proceeding.",
             "decisions": [],
             "patterns": [],
+            "workflow": {
+                "hint": "design_needed",
+                "next": "get_design_prompt",
+                "message": "Pattern not covered. Call get_design_prompt \
+                            to design before implementing.",
+            }
         })
     } else {
         serde_json::json!({
@@ -329,6 +380,11 @@ pub(crate) fn check_pattern(state: &ProjectState, description: &str) -> Value {
                 })
             }).collect::<Vec<_>>(),
             "patterns": matched_patterns,
+            "workflow": {
+                "hint": "pattern_exists",
+                "message": "Pattern covered by existing decisions. \
+                            Use get_context for the implementation brief.",
+            }
         })
     }
 }
@@ -382,6 +438,31 @@ pub(crate) fn get_architecture(state: &ProjectState) -> Value {
         })
         .collect();
 
+    let undesigned: Vec<&str> = state
+        .components
+        .iter()
+        .filter(|(name, _)| graph.decisions_for(name).is_empty())
+        .map(|(name, _)| name.as_str())
+        .collect();
+
+    let workflow = if undesigned.is_empty() {
+        serde_json::json!({
+            "hint": "architecture_complete",
+            "message": "All components have architectural decisions.",
+        })
+    } else {
+        serde_json::json!({
+            "hint": "design_needed",
+            "undesigned_components": undesigned,
+            "next": "get_design_prompt",
+            "message": format!(
+                "{} component(s) have no decisions. \
+                 Call get_design_prompt for each before implementing.",
+                undesigned.len(),
+            ),
+        })
+    };
+
     serde_json::json!({
         "project": {
             "name": state.project.project.name,
@@ -393,6 +474,7 @@ pub(crate) fn get_architecture(state: &ProjectState) -> Value {
         "total_components": state.components.len(),
         "total_decisions": state.decisions.len(),
         "total_patterns": state.patterns.len(),
+        "workflow": workflow,
     })
 }
 
@@ -905,5 +987,81 @@ mod tests {
         assert!(words.contains(&"jwt".to_string()));
         assert!(words.contains(&"dpop".to_string()));
         assert!(words.contains(&"binding".to_string()));
+    }
+
+    // ── workflow hints ─────────────────────────────────────────────────
+
+    #[test]
+    fn get_context_covered_workflow_ready() {
+        let state = test_state();
+        let result = get_context(&state, "auth", None).unwrap();
+        assert_eq!(result["status"], "covered");
+        assert_eq!(result["workflow"]["hint"], "ready_to_implement");
+    }
+
+    #[test]
+    fn get_context_not_covered_workflow_suggests_design() {
+        let state = test_state();
+        // "rate-limiter" has no component-specific decisions but project rules exist.
+        let result = get_context(&state, "rate-limiter", None).unwrap();
+        assert_eq!(result["status"], "partially_covered");
+        assert_eq!(result["workflow"]["hint"], "design_incomplete");
+        assert_eq!(result["workflow"]["next"], "get_design_prompt");
+        assert_eq!(result["workflow"]["args"]["component"], "rate-limiter");
+    }
+
+    #[test]
+    fn check_pattern_not_covered_workflow() {
+        let state = test_state();
+        let result = check_pattern(&state, "WebSocket notifications");
+        assert_eq!(result["status"], "not_covered");
+        assert_eq!(result["workflow"]["hint"], "design_needed");
+        assert_eq!(result["workflow"]["next"], "get_design_prompt");
+    }
+
+    #[test]
+    fn check_pattern_covered_workflow() {
+        let state = test_state();
+        let result = check_pattern(&state, "JWT token authentication");
+        assert_eq!(result["status"], "covered");
+        assert_eq!(result["workflow"]["hint"], "pattern_exists");
+    }
+
+    #[test]
+    fn get_architecture_shows_undesigned_components() {
+        let state = test_state();
+        let result = get_architecture(&state);
+        let wf = &result["workflow"];
+        assert_eq!(wf["hint"], "design_needed");
+        let undesigned = wf["undesigned_components"].as_array().unwrap();
+        // rate-limiter is the only component with no decisions in the fixture.
+        assert_eq!(undesigned.len(), 1);
+        assert_eq!(undesigned[0], "rate-limiter");
+    }
+
+    #[test]
+    fn project_context_no_decisions_workflow() {
+        use crate::store::schema::*;
+        let state = ProjectState::new(
+            ProjectFile {
+                trurl_version: FORMAT_VERSION.into(),
+                project: Project {
+                    name: "empty".into(),
+                    description: String::new(),
+                },
+            },
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::new(),
+            GraphIndex {
+                version: 1,
+                rebuilt: chrono::Utc::now(),
+                nodes: vec![],
+                edges: vec![],
+            },
+        );
+        let result = get_context(&state, "project", None).unwrap();
+        assert_eq!(result["workflow"]["hint"], "design_needed");
+        assert_eq!(result["workflow"]["next"], "get_design_prompt");
     }
 }

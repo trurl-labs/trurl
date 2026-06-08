@@ -257,6 +257,15 @@ impl DesignMode {
             Self::Review => "standard",
         }
     }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Quick => "quick",
+            Self::Learn => "learn",
+            Self::Review => "review",
+        }
+    }
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -286,6 +295,21 @@ pub(crate) fn build_design_prompt(
         "system_instructions": instructions,
         "context": ctx,
         "token_budget": mode.token_budget(),
+        "workflow": {
+            "hint": "design_session_active",
+            "mode": mode.as_str(),
+            "after_session": {
+                "tool": "get_context",
+                "args": { "component": component },
+            },
+            "message": format!(
+                "Design session ({}) started for `{component}`. \
+                 Follow the system_instructions. Record each decision with \
+                 record_decision, enforce comprehension gates, and after the \
+                 summary checkpoint call get_context for the implementation brief.",
+                mode.as_str(),
+            ),
+        }
     }))
 }
 
@@ -852,6 +876,25 @@ mod tests {
         let state = test_state();
         let result = build_design_prompt(&state, "project", None, DesignMode::Full).unwrap();
         assert_eq!(result["context"]["component"]["name"], "project");
+    }
+
+    #[test]
+    fn workflow_hint_present_in_all_modes() {
+        let state = test_state();
+        for mode in [
+            DesignMode::Full,
+            DesignMode::Quick,
+            DesignMode::Learn,
+            DesignMode::Review,
+        ] {
+            let result = build_design_prompt(&state, "auth", None, mode).unwrap();
+            let wf = &result["workflow"];
+            assert_eq!(wf["hint"], "design_session_active");
+            assert_eq!(wf["mode"], mode.as_str());
+            assert_eq!(wf["after_session"]["tool"], "get_context");
+            assert_eq!(wf["after_session"]["args"]["component"], "auth");
+            assert!(wf["message"].as_str().unwrap().contains("get_context"));
+        }
     }
 
     #[test]

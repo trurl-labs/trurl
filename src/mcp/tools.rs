@@ -20,7 +20,10 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
                 "name": "get_context",
                 "description": "Get the architectural context for a component. Returns \
                     decisions, project-wide rules, related decisions from connected \
-                    components, and an authoritative brief for coding agents.",
+                    components, and an authoritative brief for coding agents. \
+                    WORKFLOW: If status is \"not_covered\", call get_design_prompt \
+                    before implementing. If \"covered\", use the brief as \
+                    authoritative constraints.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -39,7 +42,9 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
             {
                 "name": "check_pattern",
                 "description": "Check whether a pattern or approach is covered by \
-                    existing decisions. Returns matching decisions sorted by relevance.",
+                    existing decisions. Returns matching decisions sorted by relevance. \
+                    WORKFLOW: If status is \"not_covered\", call get_design_prompt \
+                    to run a design session before proceeding with implementation.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -54,7 +59,8 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
             {
                 "name": "get_architecture",
                 "description": "Full architectural overview: components, connections, \
-                    decision counts, patterns, and project-wide decisions.",
+                    decision counts, patterns, and project-wide decisions. \
+                    Lists components with zero decisions as needing design.",
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {
@@ -65,7 +71,9 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
             {
                 "name": "record_decision",
                 "description": "Record a single architectural decision. Validates all \
-                    edges before writing. Atomic commit.",
+                    edges before writing. Atomic commit. WORKFLOW: After recording, \
+                    present a comprehension gate — state one concrete implication \
+                    and ask the user to confirm before proceeding.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -112,7 +120,8 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
             {
                 "name": "record_pattern",
                 "description": "Record a pattern — a synthesis of multiple decisions \
-                    into a reusable rule. Requires at least 2 decisions.",
+                    into a reusable rule. Requires at least 2 decisions. Returns the \
+                    pattern name (slug) for reference.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -146,7 +155,9 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
             {
                 "name": "remove_decision",
                 "description": "Remove a decision with cascade awareness. Refuses if \
-                    other decisions depend on it or a pattern would shrink below 2 members.",
+                    other decisions depend on it or a pattern would shrink below 2 members. \
+                    WORKFLOW: After removal, call validate_consistency to verify \
+                    graph health.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -162,7 +173,8 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
                 "name": "update_decision",
                 "description": "Modify an existing decision. 'amend' edits in place \
                     (typo, clarification). 'supersede' creates a new decision replacing \
-                    the old one (substantive change).",
+                    the old one (substantive change). WORKFLOW: After updating, \
+                    present a comprehension gate for the new decision state.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -191,7 +203,9 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
                 "name": "get_design_prompt",
                 "description": "Get a structured prompt for running a design conversation. \
                     Returns system instructions, component context, and comprehension gates \
-                    tailored to the mode.",
+                    tailored to the mode. WORKFLOW: Follow the returned instructions. \
+                    After all decisions are recorded and the summary checkpoint passes, \
+                    call get_context for the authoritative implementation brief.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -216,8 +230,10 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
             {
                 "name": "add_component",
                 "description": "Add a new component to the architecture graph. \
-                    Use this before recording decisions for a component that \
-                    doesn't exist yet.",
+                    WORKFLOW: After adding, call get_design_prompt with \
+                    mode=\"full\" to run a Socratic design conversation that \
+                    establishes architectural decisions for this component. \
+                    Do not skip the design step.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -236,7 +252,8 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
             {
                 "name": "add_connection",
                 "description": "Add a directional connection between two components. \
-                    Represents data or control flow.",
+                    Represents data or control flow. Connections provide context \
+                    to get_context and get_design_prompt.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {

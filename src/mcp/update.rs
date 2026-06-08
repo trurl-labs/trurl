@@ -82,6 +82,12 @@ pub(crate) fn remove_decision(
                 "target": c.target,
             }))
             .collect::<Vec<_>>(),
+        "workflow": {
+            "hint": "validate_recommended",
+            "next": "validate_consistency",
+            "message": "Decision removed. Call validate_consistency \
+                        to verify graph health.",
+        }
     }))
 }
 
@@ -164,11 +170,26 @@ fn amend_decision(
     // Collect affected patterns and decisions.
     let (affected_patterns, affected_decisions) = collect_affected(&state.graph, name);
 
+    let updated = &state.decisions[name];
+
     Ok(serde_json::json!({
         "name": name,
         "path": store.decision_path(name).display().to_string(),
         "affected_patterns": affected_patterns,
         "affected_decisions": affected_decisions,
+        "workflow": {
+            "hint": "comprehension_gate",
+            "decision": {
+                "choice": updated.decision.choice,
+                "reason": updated.decision.reason,
+            },
+            "message": format!(
+                "Decision amended: \"{}\" — {}. \
+                 COMPREHENSION GATE: State one concrete implication of \
+                 this change and ask the user to confirm.",
+                updated.decision.choice, updated.decision.reason,
+            ),
+        }
     }))
 }
 
@@ -194,6 +215,11 @@ fn supersede_decision(
     let choice = new_choice.unwrap_or(&old_dec.decision.choice);
     let reason = new_reason.unwrap_or(&old_dec.decision.reason);
 
+    // Clone to owned before the mutable `record_decision` call, which
+    // invalidates the `old_dec` borrow that `choice`/`reason` may hold.
+    let choice_owned = choice.to_string();
+    let reason_owned = reason.to_string();
+
     let component = old_dec.decision.component.clone();
     let tags = old_dec.decision.tags.clone();
 
@@ -214,9 +240,20 @@ fn supersede_decision(
 
     Ok(serde_json::json!({
         "name": new_name,
+        "superseded": old_name,
         "path": result["path"],
         "affected_patterns": affected_patterns,
         "affected_decisions": affected_decisions,
+        "workflow": {
+            "hint": "comprehension_gate",
+            "decision": { "choice": choice_owned, "reason": reason_owned },
+            "message": format!(
+                "Decision superseded: \"{}\" replaces `{old_name}`. \
+                 COMPREHENSION GATE: State one concrete implication of \
+                 this change and ask the user to confirm.",
+                choice_owned,
+            ),
+        }
     }))
 }
 
@@ -489,5 +526,60 @@ mod tests {
         let args = json!({ "name": "ghost", "mode": "amend", "choice": "X" });
         let err = update_decision(&store, &mut state, &args).unwrap_err();
         assert!(err.contains("ghost"));
+    }
+
+    // ── workflow hints ─────────────────────────────────────────────────
+
+    #[test]
+    fn remove_decision_workflow_suggests_validate() {
+        let (_tmp, store, mut state) = setup();
+        let d = json!({ "component": "auth", "choice": "Use JWT", "reason": "Stateless" });
+        record_decision(&store, &mut state, &d).unwrap();
+
+        let result = remove_decision(&store, &mut state, &json!({ "name": "use-jwt" })).unwrap();
+        assert_eq!(result["removed"], true);
+        assert_eq!(result["workflow"]["hint"], "validate_recommended");
+        assert_eq!(result["workflow"]["next"], "validate_consistency");
+    }
+
+    #[test]
+    fn amend_workflow_has_comprehension_gate() {
+        let (_tmp, store, mut state) = setup();
+        let d = json!({ "component": "auth", "choice": "Use JWT", "reason": "Stateless" });
+        record_decision(&store, &mut state, &d).unwrap();
+
+        let args = json!({ "name": "use-jwt", "mode": "amend", "choice": "Use JWT v2" });
+        let result = update_decision(&store, &mut state, &args).unwrap();
+        let wf = &result["workflow"];
+        assert_eq!(wf["hint"], "comprehension_gate");
+        assert_eq!(wf["decision"]["choice"], "Use JWT v2");
+        assert!(
+            wf["message"]
+                .as_str()
+                .unwrap()
+                .contains("COMPREHENSION GATE")
+        );
+    }
+
+    #[test]
+    fn supersede_workflow_has_comprehension_gate() {
+        let (_tmp, store, mut state) = setup();
+        let d = json!({ "component": "auth", "choice": "Use JWT", "reason": "Stateless" });
+        record_decision(&store, &mut state, &d).unwrap();
+
+        let args = json!({
+            "name": "use-jwt",
+            "mode": "supersede",
+            "choice": "Use PASETO",
+            "reason": "Better defaults",
+        });
+        let result = update_decision(&store, &mut state, &args).unwrap();
+        let wf = &result["workflow"];
+        assert_eq!(wf["hint"], "comprehension_gate");
+        assert_eq!(wf["decision"]["choice"], "Use PASETO");
+        assert!(
+            result.get("superseded").is_some(),
+            "supersede must report old name"
+        );
     }
 }

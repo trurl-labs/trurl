@@ -197,6 +197,16 @@ pub(crate) fn record_decision(
         "name": stem,
         "path": store.decision_path(&stem).display().to_string(),
         "warnings": warnings,
+        "workflow": {
+            "hint": "comprehension_gate",
+            "decision": { "choice": choice, "reason": reason },
+            "message": format!(
+                "Decision recorded: \"{choice}\" — {reason}. \
+                 COMPREHENSION GATE: State one concrete, testable implication \
+                 of this decision and ask the user to confirm. \
+                 Do not proceed until the gate is satisfied.",
+            ),
+        }
     }))
 }
 
@@ -316,8 +326,13 @@ pub(crate) fn record_pattern(
     state.rebuild_graph();
 
     Ok(serde_json::json!({
-        "slug": slug,
+        "name": slug,
         "path": store.pattern_path(&slug).display().to_string(),
+        "workflow": {
+            "hint": "pattern_recorded",
+            "message": "Pattern recorded. Continue the design session \
+                        or call get_context for the implementation brief.",
+        }
     }))
 }
 
@@ -381,6 +396,14 @@ pub(crate) fn add_component(
     Ok(serde_json::json!({
         "name": name,
         "path": store.component_path(name).display().to_string(),
+        "workflow": {
+            "next": "get_design_prompt",
+            "args": { "component": name, "mode": "full" },
+            "message": format!(
+                "Component `{name}` added with no decisions. \
+                 Call get_design_prompt to run a design conversation.",
+            ),
+        }
     }))
 }
 
@@ -431,6 +454,13 @@ pub(crate) fn add_connection(
     Ok(serde_json::json!({
         "from": from,
         "to": to,
+        "workflow": {
+            "hint": "topology_updated",
+            "message": format!(
+                "Connection {from} → {to} added. \
+                 get_context will now include related decisions from connected components.",
+            ),
+        }
     }))
 }
 
@@ -608,7 +638,7 @@ mod tests {
             "decisions": ["use-redis", "redis-pool"],
         });
         let result = record_pattern(&store, &mut state, &args).unwrap();
-        let slug = result["slug"].as_str().unwrap();
+        let slug = result["name"].as_str().unwrap();
         assert!(!slug.is_empty());
         assert!(state.patterns.contains_key(slug));
 
@@ -756,5 +786,78 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("already exists"));
+    }
+
+    // ── workflow hints ─────────────────────────────────────────────────
+
+    #[test]
+    fn add_component_workflow_suggests_design() {
+        let (_tmp, store, mut state) = setup();
+        let args = json!({ "name": "cache", "description": "Caching layer" });
+        let result = add_component(&store, &mut state, &args).unwrap();
+        let wf = &result["workflow"];
+        assert_eq!(wf["next"], "get_design_prompt");
+        assert_eq!(wf["args"]["component"], "cache");
+        assert_eq!(wf["args"]["mode"], "full");
+        assert!(
+            wf["message"]
+                .as_str()
+                .unwrap()
+                .contains("design conversation")
+        );
+    }
+
+    #[test]
+    fn record_decision_workflow_has_comprehension_gate() {
+        let (_tmp, store, mut state) = setup();
+        let args = json!({
+            "component": "auth",
+            "choice": "Use JWT",
+            "reason": "Stateless auth",
+        });
+        let result = record_decision(&store, &mut state, &args).unwrap();
+        let wf = &result["workflow"];
+        assert_eq!(wf["hint"], "comprehension_gate");
+        assert_eq!(wf["decision"]["choice"], "Use JWT");
+        assert_eq!(wf["decision"]["reason"], "Stateless auth");
+        assert!(
+            wf["message"]
+                .as_str()
+                .unwrap()
+                .contains("COMPREHENSION GATE")
+        );
+    }
+
+    #[test]
+    fn record_pattern_returns_name_not_slug() {
+        let (_tmp, store, mut state) = setup();
+        let d1 = json!({ "component": "auth", "choice": "Use JWT", "reason": "Fast" });
+        let d2 = json!({ "component": "database", "choice": "JWT verify", "reason": "Auth" });
+        record_decision(&store, &mut state, &d1).unwrap();
+        record_decision(&store, &mut state, &d2).unwrap();
+
+        let args = json!({
+            "name": "Token pattern",
+            "description": "Token handling",
+            "decisions": ["use-jwt", "jwt-verify"],
+        });
+        let result = record_pattern(&store, &mut state, &args).unwrap();
+        assert!(
+            result.get("name").is_some(),
+            "must return 'name', not 'slug'"
+        );
+        assert!(
+            result.get("slug").is_none(),
+            "must not return legacy 'slug' key"
+        );
+        assert_eq!(result["workflow"]["hint"], "pattern_recorded");
+    }
+
+    #[test]
+    fn add_connection_workflow_present() {
+        let (_tmp, store, mut state) = setup();
+        let args = json!({ "from": "auth", "to": "database" });
+        let result = add_connection(&store, &mut state, &args).unwrap();
+        assert_eq!(result["workflow"]["hint"], "topology_updated");
     }
 }
