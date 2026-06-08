@@ -13,10 +13,8 @@ pub(crate) mod token;
 pub(crate) mod ws;
 
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
-use std::path::Path;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -25,11 +23,11 @@ use axum::http::header::{
 };
 use axum::middleware;
 use axum::routing::{delete, get, post, put};
-use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
 
-use crate::store::{ProjectState, STATE_DIR, Store};
+use crate::store::watcher::WatcherGuard;
+use crate::store::{ProjectState, Store};
 
 use layout::LayoutState;
 
@@ -124,12 +122,7 @@ pub(crate) async fn start(
                     "default-src 'self'; \
                      script-src 'self'; \
                      style-src 'self' 'unsafe-inline'; \
-                     connect-src 'self' ws://127.0.0.1:*; \
-                     img-src 'self' data:; \
-                     font-src 'none'; \
-                     object-src 'none'; \
-                     base-uri 'none'; \
-                     form-action 'none'",
+                     connect-src 'self' ws://127.0.0.1:*",
                 ),
             ),
         )
@@ -187,99 +180,42 @@ async fn shutdown_signal() {
 
 // ── File watcher ───────────────────────────────────────────────────────────
 
-const DEBOUNCE: Duration = Duration::from_millis(50);
+/// Debounce window for the map watcher. Lower than the MCP watcher
+/// (100ms) — the interactive UI benefits from faster updates at the
+/// cost of slightly more reloads during multi-file operations.
+const MAP_DEBOUNCE: Duration = Duration::from_millis(50);
 
-/// Spawn a file watcher that detects external `.trurl/` changes and
-/// pushes diffs over the WebSocket broadcast channel.
-fn spawn_watcher(state: Arc<MapState>) -> Option<RecommendedWatcher> {
+/// Spawn a file watcher that detects external `.trurl/` changes,
+/// diffs the state, and pushes events over the WebSocket broadcast
+/// channel.
+fn spawn_watcher(state: Arc<MapState>) -> Option<WatcherGuard> {
     let store_root = state.store.root().to_path_buf();
-    let state_dir = store_root.join(STATE_DIR);
 
-    let (tx, rx) = std::sync::mpsc::channel();
+    match crate::store::watcher::spawn(
+        &store_root,
+        MAP_DEBOUNCE,
+        "trurl-map-watcher",
+        move |new_state| {
+            let events = {
+                let old = state.read_project_state();
+                diff::diff_states(&old, &new_state)
+            };
 
-    let mut watcher = match RecommendedWatcher::new(
-        move |result: Result<notify::Event, notify::Error>| {
-            if let Ok(event) = result {
-                let _ = tx.send(event);
+            if !events.is_empty() {
+                ws::broadcast(&state.ws_tx, &events);
             }
+
+            let mut guard = state.write_project_state();
+            *guard = new_state;
         },
-        Config::default(),
     ) {
-        Ok(w) => w,
+        Ok(guard) => {
+            eprintln!("trurl: file watcher active");
+            Some(guard)
+        }
         Err(e) => {
             eprintln!("trurl: file watcher unavailable: {e}");
-            return None;
+            None
         }
-    };
-
-    if let Err(e) = watcher.watch(&store_root, RecursiveMode::Recursive) {
-        eprintln!("trurl: failed to watch {}: {e}", store_root.display());
-        return None;
-    }
-
-    let watcher_store = Store::at(store_root);
-
-    if let Err(e) = thread::Builder::new()
-        .name("trurl-map-watcher".into())
-        .spawn(move || watcher_loop(&watcher_store, &state, &state_dir, rx))
-    {
-        eprintln!("trurl: failed to spawn watcher thread: {e}");
-    }
-
-    eprintln!("trurl: file watcher active");
-    Some(watcher)
-}
-
-fn watcher_loop(
-    store: &Store,
-    state: &Arc<MapState>,
-    state_dir: &Path,
-    rx: std::sync::mpsc::Receiver<notify::Event>,
-) {
-    loop {
-        let event = match rx.recv() {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-
-        if event.paths.iter().all(|p| p.starts_with(state_dir)) {
-            continue;
-        }
-
-        // Debounce.
-        let deadline = Instant::now() + DEBOUNCE;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            match rx.recv_timeout(remaining) {
-                Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
-            }
-        }
-
-        // Snapshot old state, reload, diff, broadcast.
-        match store.load_state() {
-            Ok(new_state) => {
-                let events = {
-                    let old = state.read_project_state();
-                    diff::diff_states(&old, &new_state)
-                };
-
-                if !events.is_empty() {
-                    ws::broadcast(&state.ws_tx, &events);
-                }
-
-                let mut guard = state.write_project_state();
-                *guard = new_state;
-            }
-            Err(e) => {
-                eprintln!("trurl: watcher reload failed: {e}");
-            }
-        }
-
-        // Drain events that arrived during reload.
-        while rx.try_recv().is_ok() {}
     }
 }

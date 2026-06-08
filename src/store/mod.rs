@@ -1,6 +1,7 @@
 pub mod graph;
 pub mod schema;
 mod validate;
+pub(crate) mod watcher;
 
 mod state;
 mod write;
