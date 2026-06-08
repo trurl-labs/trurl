@@ -1,8 +1,9 @@
 import type { Camera } from './camera';
-import type { Graph } from './graph';
-import type { RenderNode } from './types';
-import { LOD } from './types';
-import type { AABB } from './quadtree';
+import type { Graph } from '../state/graph';
+import type { RenderNode } from '../types';
+import { LOD } from './lod';
+import type { AABB } from './culling';
+import { EDGE_DASH, edgeColor } from './edges';
 
 // ── Colors (CSS variable-aware) ────────────────────────────────────────────
 
@@ -28,19 +29,7 @@ function css(prop: string, fallback: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(prop).trim() || fallback;
 }
 
-// ── Edge dash patterns per kind ────────────────────────────────────────────
-
-const EDGE_DASH: Record<string, number[]> = {
-  depends_on: [6, 4],
-  constrains: [2, 3],
-  supersedes: [8, 3, 2, 3],
-};
-
-function edgeColor(kind: string): string {
-  if (kind === 'depends_on') return C.edgeDep();
-  if (kind === 'constrains') return C.edgeCon();
-  return C.edge();
-}
+// ── Edge dash patterns imported from ./edges ───────────────────────────────
 
 // ── Renderer ───────────────────────────────────────────────────────────────
 

@@ -383,3 +383,124 @@ details li {
   pointer-events: auto;
   cursor: crosshair;
 }
+
+/* ── Reconnecting indicator ─────────────────────────────────────────── */
+.ws-status {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 320px;
+  z-index: 25;
+  padding: 6px 0;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: #1a1d27;
+  background: #e8a735;
+}
+.ws-status.hidden {
+  display: none;
+}
+
+/* ── Breadcrumb trail ───────────────────────────────────────────────── */
+.breadcrumb {
+  position: fixed;
+  top: 10px;
+  left: 12px;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+.breadcrumb:empty {
+  display: none;
+}
+.breadcrumb-seg {
+  pointer-events: auto;
+  cursor: pointer;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.breadcrumb-seg:hover {
+  background: var(--surface-hi);
+  border-color: var(--accent-dim);
+}
+.breadcrumb-sep {
+  color: var(--text-dim);
+  user-select: none;
+}
+
+/* ── Command palette ────────────────────────────────────────────────── */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  justify-content: center;
+  padding-top: 120px;
+}
+.palette-backdrop.hidden {
+  display: none;
+}
+.palette {
+  width: 480px;
+  max-height: 400px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-self: flex-start;
+}
+.palette input {
+  width: 100%;
+  padding: 12px 16px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  font-family: inherit;
+  outline: none;
+}
+.palette-results {
+  overflow-y: auto;
+  max-height: 320px;
+}
+.palette-results:empty {
+  display: none;
+}
+.palette-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+.palette-action:last-child {
+  border-bottom: none;
+}
+.palette-action:hover,
+.palette-action.active {
+  background: var(--surface-hi);
+}
+.palette-shortcut {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: monospace;
+}

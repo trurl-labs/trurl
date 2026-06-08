@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { ForceLayout } from './layout';
-import type { RenderNode, RenderEdge } from './types';
+import { ForceLayout } from './force';
+import type { RenderNode, RenderEdge } from '../types';
 
 function node(name: string, x: number, y: number, pinned = false): RenderNode {
   return { name, kind: 'component', x, y, w: 180, h: 60, pinned };

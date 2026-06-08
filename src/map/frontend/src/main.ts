@@ -1,12 +1,74 @@
-import { Camera } from './camera';
-import { Graph, ApiClient, WsConnection } from './graph';
-import { ForceLayout } from './layout';
-import { Panel } from './panel';
-import { Renderer } from './renderer';
-import { LOD, computeLOD } from './types';
-import { search, neighborhood } from './search';
-import type { AABB } from './quadtree';
-import type { SearchResult } from './search';
+import { Camera } from './renderer/camera';
+import { Graph } from './state/graph';
+import { ApiClient } from './state/api';
+import { WsConnection } from './state/ws';
+import type { WsState } from './state/ws';
+import { ForceLayout } from './layout/force';
+import { Panel } from './ui/panel';
+import { Renderer } from './renderer/canvas';
+import { LOD, computeLOD } from './renderer/lod';
+import { search, neighborhood } from './ui/search';
+import { CommandPalette } from './ui/command';
+import type { PaletteAction } from './ui/command';
+import { Breadcrumb } from './ui/breadcrumb';
+import { KeyboardDispatch, Keys } from './interaction/keyboard';
+import type { AABB } from './renderer/culling';
+import type { SearchResult } from './ui/search';
+
+// ── Undo / Redo ──────────────────────────────────────────────────────────
+
+interface UndoCommand {
+  readonly description: string;
+  undo(): Promise<void>;
+  redo(): Promise<void>;
+}
+
+class UndoStack {
+  private undos: UndoCommand[] = [];
+  private redos: UndoCommand[] = [];
+  private readonly limit = 50;
+
+  push(cmd: UndoCommand): void {
+    this.undos.push(cmd);
+    if (this.undos.length > this.limit) this.undos.shift();
+    this.redos.length = 0;
+  }
+
+  async undo(): Promise<string | null> {
+    const cmd = this.undos.pop();
+    if (!cmd) return null;
+    try {
+      await cmd.undo();
+      this.redos.push(cmd);
+      return cmd.description;
+    } catch (e) {
+      console.error('Undo failed:', e);
+      return null;
+    }
+  }
+
+  async redo(): Promise<string | null> {
+    const cmd = this.redos.pop();
+    if (!cmd) return null;
+    try {
+      await cmd.redo();
+      this.undos.push(cmd);
+      return cmd.description;
+    } catch (e) {
+      console.error('Redo failed:', e);
+      return null;
+    }
+  }
+
+  canUndo(): boolean {
+    return this.undos.length > 0;
+  }
+  canRedo(): boolean {
+    return this.redos.length > 0;
+  }
+}
+
+// ── App ──────────────────────────────────────────────────────────────────
 
 class App {
   private graph = new Graph();
@@ -16,6 +78,9 @@ class App {
   private panel: Panel;
   private miniCtx: CanvasRenderingContext2D;
   private api: ApiClient;
+  private undoStack = new UndoStack();
+  private palette: CommandPalette;
+  private breadcrumb: Breadcrumb;
   private aria: HTMLElement;
 
   private selected: string | null = null;
@@ -61,13 +126,26 @@ class App {
     });
     this.aria = document.getElementById('aria-live')!;
 
+    this.palette = new CommandPalette();
+    this.breadcrumb = new Breadcrumb({
+      onProject: () => {
+        this.selected = null;
+        this.focusSet = null;
+        this.panel.showProject(this.graph);
+        this.fitView();
+        this.breadcrumb.update(this.graph.projectName, null);
+      },
+      onComponent: (name) => this.selectAndFocus(name),
+    });
+
     const minimap = document.getElementById('minimap') as HTMLCanvasElement;
     const mctx = minimap.getContext('2d');
     if (!mctx) throw new Error('minimap context');
     this.miniCtx = mctx;
 
-    this.setupEvents(canvas, minimap);
+    this.setupCanvasEvents(canvas, minimap);
     this.setupSearch();
+    this.installKeyboard();
     this.handleResize();
     window.addEventListener('resize', () => this.handleResize());
 
@@ -81,6 +159,7 @@ class App {
         this.fitView();
         this.updateLOD();
         this.panel.showProject(this.graph);
+        this.breadcrumb.update(this.graph.projectName, null);
         this.needsRender = true;
       })
       .catch((e) => {
@@ -88,7 +167,11 @@ class App {
         this.panel.showEmpty();
       });
 
-    new WsConnection(token, (ev) => this.handleWsEvent(ev));
+    new WsConnection(
+      token,
+      (ev) => this.handleWsEvent(ev),
+      (state) => this.handleWsState(state),
+    );
     this.renderLoop();
   }
 
@@ -104,19 +187,18 @@ class App {
     };
     const visible = this.graph.quadtree.queryViewport(vpAABB);
     this.visibleCount = new Set(visible).size;
-    this.lod = computeLOD(this.visibleCount);
+    this.lod = computeLOD(this.visibleCount, vp.w * vp.h);
   }
 
-  // ── Canvas events ───────────────────────────────────────────────────────
+  // ── Canvas pointer events ───────────────────────────────────────────────
 
-  private setupEvents(canvas: HTMLCanvasElement, minimap: HTMLCanvasElement): void {
+  private setupCanvasEvents(canvas: HTMLCanvasElement, minimap: HTMLCanvasElement): void {
     canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
     canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
     canvas.addEventListener('pointerup', () => this.onPointerUp());
     canvas.addEventListener('pointerleave', () => this.onPointerUp());
     canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
 
-    // Minimap interaction.
     minimap.addEventListener('pointerdown', (e) => this.onMinimapDown(e));
     minimap.addEventListener('pointermove', (e) => this.onMinimapMove(e));
     minimap.addEventListener('pointerup', () => {
@@ -125,14 +207,12 @@ class App {
     minimap.addEventListener('pointerleave', () => {
       this.minimapDragging = false;
     });
-
-    window.addEventListener('keydown', (e) => this.onKeyDown(e));
   }
 
   private onPointerDown(e: PointerEvent): void {
-    if (this.searchOpen) {
-      this.closeSearch();
-    }
+    if (this.searchOpen) this.closeSearch();
+    if (this.palette.isOpen) this.palette.close();
+
     const canvas = e.target as HTMLCanvasElement;
     canvas.setPointerCapture(e.pointerId);
     const wx = this.camera.toWorldX(e.offsetX);
@@ -151,6 +231,7 @@ class App {
       this.focusSet = null;
       this.panel.showProject(this.graph);
     }
+    this.breadcrumb.update(this.graph.projectName, this.selected);
     this.lastMouse = { x: e.offsetX, y: e.offsetY };
     this.needsRender = true;
   }
@@ -195,96 +276,231 @@ class App {
 
   // ── Keyboard ────────────────────────────────────────────────────────────
 
-  private onKeyDown(e: KeyboardEvent): void {
-    // Search: Ctrl+F / Cmd+F / `/`
-    if (e.key === '/' || ((e.ctrlKey || e.metaKey) && e.key === 'f')) {
-      e.preventDefault();
-      this.openSearch();
-      return;
+  private installKeyboard(): void {
+    const PAN = 40;
+    const zoomCenter = (f: number) => {
+      this.camera.zoomAt(this.camera.screenW / 2, this.camera.screenH / 2, f);
+      this.updateLOD();
+      this.needsRender = true;
+    };
+    const pan = (dx: number, dy: number) => {
+      this.camera.pan(dx, dy);
+      this.updateLOD();
+      this.needsRender = true;
+    };
+
+    new KeyboardDispatch([
+      {
+        match: Keys.cmdK,
+        run: (e) => {
+          e.preventDefault();
+          if (this.palette.isOpen) this.palette.close();
+          else this.palette.open(this.buildPaletteActions());
+        },
+      },
+      { match: () => this.palette.isOpen, run: () => {} }, // palette handles its own keys
+      {
+        match: Keys.search,
+        run: (e) => {
+          e.preventDefault();
+          this.openSearch();
+        },
+      },
+      { match: () => this.searchOpen, run: () => {} }, // search handles its own keys
+      {
+        match: Keys.undo,
+        run: (e) => {
+          e.preventDefault();
+          this.undoStack.undo().then((d) => {
+            if (d) {
+              this.announce(`Undo: ${d}`);
+              this.reloadGraph();
+            }
+          });
+        },
+      },
+      {
+        match: Keys.redo,
+        run: (e) => {
+          e.preventDefault();
+          this.undoStack.redo().then((d) => {
+            if (d) {
+              this.announce(`Redo: ${d}`);
+              this.reloadGraph();
+            }
+          });
+        },
+      },
+      {
+        match: Keys.escape,
+        run: () => {
+          if (this.focusSet) {
+            this.focusSet = null;
+            this.needsRender = true;
+          } else if (this.selected) {
+            this.selected = null;
+            this.focusSet = null;
+            this.panel.showProject(this.graph);
+            this.announce('Selection cleared');
+            this.breadcrumb.update(this.graph.projectName, null);
+            this.needsRender = true;
+          }
+        },
+      },
+      {
+        match: Keys.zoomFit,
+        run: (e) => {
+          e.preventDefault();
+          this.fitView();
+        },
+      },
+      { match: Keys.zoomIn, run: () => zoomCenter(1.15) },
+      { match: Keys.zoomOut, run: () => zoomCenter(0.87) },
+      { match: Keys.arrowLeft, run: () => pan(PAN, 0) },
+      { match: Keys.arrowRight, run: () => pan(-PAN, 0) },
+      { match: Keys.arrowUp, run: () => pan(0, PAN) },
+      { match: Keys.arrowDown, run: () => pan(0, -PAN) },
+      {
+        match: Keys.tab,
+        run: (e) => {
+          if (this.componentNames.length === 0) return;
+          e.preventDefault();
+          const dir = e.shiftKey ? -1 : 1;
+          const curIdx = this.selected ? this.componentNames.indexOf(this.selected) : -1;
+          let next = curIdx + dir;
+          if (next < 0) next = this.componentNames.length - 1;
+          if (next >= this.componentNames.length) next = 0;
+          this.selectAndFocus(this.componentNames[next]);
+        },
+      },
+      {
+        match: (e) => Keys.enter(e) && this.selected !== null,
+        run: () => {
+          this.focusSet = neighborhood(this.graph, this.selected!);
+          this.zoomToNode(this.selected!);
+          this.needsRender = true;
+        },
+      },
+      {
+        match: (e) => {
+          if (!Keys.del(e) || !this.selected) return false;
+          const tag = (document.activeElement as HTMLElement)?.tagName;
+          if (tag === 'INPUT' || tag === 'TEXTAREA') return false;
+          if ((document.activeElement as HTMLElement)?.isContentEditable) return false;
+          return true;
+        },
+        run: (e) => {
+          e.preventDefault();
+          this.deleteSelected();
+        },
+      },
+    ]).attach();
+  }
+
+  // ── Command palette actions ─────────────────────────────────────────────
+
+  private buildPaletteActions(): PaletteAction[] {
+    const actions: PaletteAction[] = [
+      { label: 'Zoom to fit', shortcut: 'Ctrl+0', run: () => this.fitView() },
+      { label: 'Search', shortcut: 'Ctrl+F', run: () => this.openSearch() },
+      {
+        label: 'Reset layout',
+        run: () => {
+          if (!confirm('Unpin all nodes and recompute layout? Pinned positions will be lost.'))
+            return;
+          this.api
+            .resetLayout()
+            .then((v) => {
+              this.graph.layoutVersion = v;
+              for (const n of this.graph.nodes.values()) n.pinned = false;
+              this.layout.run(this.graph.nodes, this.graph.edges, 200);
+              this.graph.rebuildQuadtree();
+              this.fitView();
+            })
+            .catch((e) => console.error('Reset layout failed:', e));
+        },
+      },
+    ];
+
+    if (this.undoStack.canUndo()) {
+      actions.push({
+        label: 'Undo',
+        shortcut: 'Ctrl+Z',
+        run: () => {
+          this.undoStack.undo().then((d) => {
+            if (d) this.reloadGraph();
+          });
+        },
+      });
+    }
+    if (this.undoStack.canRedo()) {
+      actions.push({
+        label: 'Redo',
+        shortcut: 'Ctrl+Shift+Z',
+        run: () => {
+          this.undoStack.redo().then((d) => {
+            if (d) this.reloadGraph();
+          });
+        },
+      });
     }
 
-    // If search is open, let its own handlers take over.
-    if (this.searchOpen) return;
+    for (const name of this.componentNames) {
+      actions.push({
+        label: `Focus: ${name}`,
+        run: () => this.selectAndFocus(name),
+      });
+    }
 
-    // Escape: clear focus → clear selection → noop.
-    if (e.key === 'Escape') {
-      if (this.focusSet) {
-        this.focusSet = null;
-        this.needsRender = true;
+    return actions;
+  }
+
+  // ── Delete selected ─────────────────────────────────────────────────────
+
+  private deleteSelected(): void {
+    const name = this.selected;
+    if (!name) return;
+    const node = this.graph.nodes.get(name);
+    const decision = this.graph.decisions.get(name);
+
+    if (node) {
+      const desc = node.description ?? '';
+      if (
+        !confirm(
+          `Delete component "${name}"?\n\nThis cannot be undone if cascade rules block re-creation.`,
+        )
+      ) {
         return;
       }
-      this.selected = null;
-      this.panel.showProject(this.graph);
-      this.announce('Selection cleared');
-      this.needsRender = true;
-      return;
-    }
-
-    // Zoom to fit: Ctrl+0 / Cmd+0
-    if ((e.ctrlKey || e.metaKey) && e.key === '0') {
-      e.preventDefault();
-      this.fitView();
-      return;
-    }
-
-    // Zoom +/-
-    if (e.key === '=' || e.key === '+') {
-      this.camera.zoomAt(this.camera.screenW / 2, this.camera.screenH / 2, 1.15);
-      this.updateLOD();
-      this.needsRender = true;
-      return;
-    }
-    if (e.key === '-') {
-      this.camera.zoomAt(this.camera.screenW / 2, this.camera.screenH / 2, 0.87);
-      this.updateLOD();
-      this.needsRender = true;
-      return;
-    }
-
-    // Arrow key pan (40px per press).
-    const PAN = 40;
-    if (e.key === 'ArrowLeft') {
-      this.camera.pan(PAN, 0);
-      this.updateLOD();
-      this.needsRender = true;
-      return;
-    }
-    if (e.key === 'ArrowRight') {
-      this.camera.pan(-PAN, 0);
-      this.updateLOD();
-      this.needsRender = true;
-      return;
-    }
-    if (e.key === 'ArrowUp') {
-      this.camera.pan(0, PAN);
-      this.updateLOD();
-      this.needsRender = true;
-      return;
-    }
-    if (e.key === 'ArrowDown') {
-      this.camera.pan(0, -PAN);
-      this.updateLOD();
-      this.needsRender = true;
-      return;
-    }
-
-    // Tab: cycle through components.
-    if (e.key === 'Tab' && this.componentNames.length > 0) {
-      e.preventDefault();
-      const dir = e.shiftKey ? -1 : 1;
-      const curIdx = this.selected ? this.componentNames.indexOf(this.selected) : -1;
-      let next = curIdx + dir;
-      if (next < 0) next = this.componentNames.length - 1;
-      if (next >= this.componentNames.length) next = 0;
-      const name = this.componentNames[next];
-      this.selectAndFocus(name);
-      return;
-    }
-
-    // Enter: zoom to selected component neighborhood.
-    if (e.key === 'Enter' && this.selected) {
-      this.zoomToNode(this.selected);
-      return;
+      this.api
+        .deleteComponent(name)
+        .then(() => {
+          this.undoStack.push({
+            description: `delete component ${name}`,
+            undo: () => this.api.createComponent(name, desc),
+            redo: () => this.api.deleteComponent(name),
+          });
+          this.selected = null;
+          this.breadcrumb.update(this.graph.projectName, null);
+          this.reloadGraph();
+        })
+        .catch((e) => alert(e.message));
+    } else if (decision) {
+      if (!confirm(`Delete decision "${name}"?`)) return;
+      this.api
+        .deleteDecision(name)
+        .then(() => {
+          this.undoStack.push({
+            description: `delete decision ${name}`,
+            undo: () =>
+              Promise.reject(new Error('Decision deletion cannot be undone via the map API')),
+            redo: () => this.api.deleteDecision(name),
+          });
+          this.selected = null;
+          this.breadcrumb.update(this.graph.projectName, null);
+          this.reloadGraph();
+        })
+        .catch((e) => alert(e.message));
     }
   }
 
@@ -363,7 +579,6 @@ class App {
       })
       .join('');
 
-    // Click handler on results.
     for (const child of el.children) {
       child.addEventListener('click', () => {
         const idx = parseInt((child as HTMLElement).dataset.idx ?? '-1', 10);
@@ -381,14 +596,12 @@ class App {
       this.selectAndFocus(result.name);
       this.focusSet = neighborhood(this.graph, result.name);
     } else if (result.kind === 'decision') {
-      // Focus the parent component.
       const dec = this.graph.decisions.get(result.name);
       if (dec) {
         this.selectAndFocus(dec.component);
         this.focusSet = neighborhood(this.graph, dec.component);
       }
     } else if (result.kind === 'pattern') {
-      // Focus the first applied component.
       const pat = this.graph.patterns.get(result.name);
       if (pat && pat.components.length > 0) {
         this.selectAndFocus(pat.components[0]);
@@ -431,6 +644,7 @@ class App {
     this.selected = name;
     this.panel.showComponent(node, this.graph);
     this.announce(`Selected component: ${name}`);
+    this.breadcrumb.update(this.graph.projectName, name);
     this.zoomToNode(name);
   }
 
@@ -453,8 +667,16 @@ class App {
     this.reloadGraph();
   }
 
-  /** Reload the full graph from the server. Called on WebSocket events
-   *  and after panel mutations (edit, delete). */
+  private handleWsState(state: WsState): void {
+    const el = document.getElementById('ws-status')!;
+    if (state === 'reconnecting') {
+      el.classList.remove('hidden');
+    } else {
+      el.classList.add('hidden');
+      this.reloadGraph();
+    }
+  }
+
   private reloadGraph(): void {
     this.api
       .fetchGraph()
@@ -480,6 +702,7 @@ class App {
       this.panel.showComponent(node, this.graph);
     } else {
       this.selected = null;
+      this.breadcrumb.update(this.graph.projectName, null);
       this.panel.showProject(this.graph);
     }
   }
@@ -507,7 +730,6 @@ class App {
   // ── Render loop ─────────────────────────────────────────────────────────
 
   private renderLoop = (): void => {
-    // Advance camera animation — forces a render if the camera moved.
     if (this.camera.tick()) {
       this.updateLOD();
       this.needsRender = true;
@@ -521,10 +743,6 @@ class App {
     requestAnimationFrame(this.renderLoop);
   };
 
-  /**
-   * Render the minimap and return the transform used, so minimap
-   * click/drag can convert screen→world coordinates.
-   */
   private renderMinimap(): typeof this.minimapTransform {
     const mw = 180;
     const mh = 120;

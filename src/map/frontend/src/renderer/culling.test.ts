@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { Quadtree } from './quadtree';
-import type { RenderNode } from './types';
+import { Quadtree } from './culling';
+import type { RenderNode } from '../types';
 
 function node(name: string, x: number, y: number, w = 180, h = 60): RenderNode {
   return { name, kind: 'component', x, y, w, h, pinned: false };

@@ -1,4 +1,4 @@
-import type { RenderNode, RenderEdge } from './types';
+import type { RenderNode, RenderEdge } from '../types';
 
 /**
  * Simple force-directed layout. Runs a fixed number of iterations on

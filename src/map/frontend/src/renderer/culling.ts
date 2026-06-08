@@ -1,4 +1,4 @@
-import type { RenderNode } from './types';
+import type { RenderNode } from '../types';
 
 // ── AABB helpers ──────────────────────────────────────────────────────────
 

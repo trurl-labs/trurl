@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { search, neighborhood } from './search';
-import { Graph } from './graph';
-import type { GraphSnapshot } from './types';
+import { Graph } from '../state/graph';
+import type { GraphSnapshot } from '../types';
 
 /** A realistic graph snapshot: 3 components, 3 decisions, 1 pattern. */
 function testSnapshot(): GraphSnapshot {

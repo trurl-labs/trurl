@@ -9,6 +9,10 @@
   <body>
     <canvas id="canvas"></canvas>
     <canvas id="minimap" width="360" height="240"></canvas>
+    <!-- Reconnecting indicator -->
+    <div id="ws-status" class="ws-status hidden">Reconnecting…</div>
+    <!-- Breadcrumb trail -->
+    <div id="breadcrumb" class="breadcrumb"></div>
     <!-- Search overlay -->
     <div id="search-bar" class="search-bar hidden">
       <input
@@ -19,6 +23,19 @@
         spellcheck="false"
       />
       <div id="search-results" class="search-results"></div>
+    </div>
+    <!-- Command palette overlay -->
+    <div id="palette-backdrop" class="palette-backdrop hidden">
+      <div class="palette">
+        <input
+          id="palette-input"
+          type="text"
+          placeholder="Type a command…"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <div id="palette-results" class="palette-results"></div>
+      </div>
     </div>
     <div id="panel"></div>
     <!-- ARIA live region: announces selected node for screen readers. -->

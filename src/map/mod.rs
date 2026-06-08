@@ -237,7 +237,7 @@ fn watcher_loop(
             Err(_) => return,
         };
 
-        if !event.paths.iter().any(|p| !p.starts_with(state_dir)) {
+        if event.paths.iter().all(|p| p.starts_with(state_dir)) {
             continue;
         }
 

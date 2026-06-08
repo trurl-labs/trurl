@@ -1,5 +1,6 @@
-import type { RenderNode, DecisionNode, PatternNode } from './types';
-import type { Graph, ApiClient } from './graph';
+import type { RenderNode, DecisionNode, PatternNode } from '../types';
+import type { Graph } from '../state/graph';
+import type { ApiClient } from '../state/api';
 
 // ── Callbacks ──────────────────────────────────────────────────────────────
 

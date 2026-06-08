@@ -1,4 +1,4 @@
-import type { Graph } from './graph';
+import type { Graph } from '../state/graph';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
