@@ -72,8 +72,11 @@ export class Renderer {
    * Main render pass. Uses the quadtree for viewport culling —
    * only visible nodes are drawn, giving O(k) cost where k is
    * the number of on-screen nodes, not the total graph size.
+   *
+   * When `focus` is set, nodes outside the set are drawn at 30%
+   * opacity (search highlight / focus mode per spec §Navigation).
    */
-  render(graph: Graph, selected: string | null, lod: LOD): void {
+  render(graph: Graph, selected: string | null, lod: LOD, focus: Set<string> | null = null): void {
     const { ctx, cam, dpr } = this;
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -97,15 +100,15 @@ export class Renderer {
     ctx.scale(cam.zoom, cam.zoom);
     ctx.translate(-cam.cx, -cam.cy);
 
-    this.drawEdges(graph, visibleNames, lod);
-    this.drawNodes(graph, visibleNames, selected, lod);
+    this.drawEdges(graph, visibleNames, lod, focus);
+    this.drawNodes(graph, visibleNames, selected, lod, focus);
 
     ctx.restore();
   }
 
   // ── Edges ──────────────────────────────────────────────────────────────
 
-  private drawEdges(graph: Graph, visible: Set<string>, lod: LOD): void {
+  private drawEdges(graph: Graph, visible: Set<string>, lod: LOD, focus: Set<string> | null): void {
     const { ctx, cam } = this;
     const baseWidth = 1.5 / cam.zoom;
 
@@ -120,6 +123,10 @@ export class Renderer {
       if (!a || !b) continue;
       // Draw if either endpoint is visible (edge may cross viewport).
       if (!visible.has(e.from) && !visible.has(e.to)) continue;
+
+      // Focus dimming: edges between non-focused nodes fade to 30%.
+      const dimmed = focus !== null && !focus.has(e.from) && !focus.has(e.to);
+      ctx.globalAlpha = dimmed ? 0.15 : 1;
 
       ctx.strokeStyle = edgeColor(e.kind);
       ctx.lineWidth = baseWidth;
@@ -169,15 +176,26 @@ export class Renderer {
     }
 
     ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
   }
 
   // ── Nodes ──────────────────────────────────────────────────────────────
 
-  private drawNodes(graph: Graph, visible: Set<string>, selected: string | null, lod: LOD): void {
+  private drawNodes(
+    graph: Graph,
+    visible: Set<string>,
+    selected: string | null,
+    lod: LOD,
+    focus: Set<string> | null,
+  ): void {
     for (const name of visible) {
       const node = graph.nodes.get(name);
       if (!node) continue;
       const isSelected = name === selected;
+
+      // Focus dimming: non-focused nodes at 30%.
+      const dimmed = focus !== null && !focus.has(name);
+      this.ctx.globalAlpha = dimmed ? 0.3 : 1;
 
       switch (lod) {
         case LOD.Overview:
@@ -191,6 +209,7 @@ export class Renderer {
           break;
       }
     }
+    this.ctx.globalAlpha = 1;
   }
 
   /** LOD 0 — System Overview: labeled box + decision count badge. */

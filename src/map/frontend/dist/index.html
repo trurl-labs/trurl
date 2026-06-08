@@ -9,6 +9,11 @@
   <body>
     <canvas id="canvas"></canvas>
     <canvas id="minimap" width="360" height="240"></canvas>
+    <!-- Search overlay -->
+    <div id="search-bar" class="search-bar hidden">
+      <input id="search-input" type="text" placeholder="Search components, decisions, patterns…" autocomplete="off" spellcheck="false" />
+      <div id="search-results" class="search-results"></div>
+    </div>
     <div id="panel"></div>
     <!-- ARIA live region: announces selected node for screen readers. -->
     <div id="aria-live" class="sr-only" aria-live="polite" aria-atomic="true"></div>

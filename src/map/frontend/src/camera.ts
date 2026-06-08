@@ -16,6 +16,19 @@ export class Camera {
   private minZoom = 0.05;
   private maxZoom = 8;
 
+  // ── Animation state ──────────────────────────────────────────────────
+
+  private anim: {
+    fromCx: number;
+    fromCy: number;
+    fromZoom: number;
+    toCx: number;
+    toCy: number;
+    toZoom: number;
+    start: number;
+    duration: number;
+  } | null = null;
+
   /** World → screen. */
   toScreenX(wx: number): number {
     return (wx - this.cx) * this.zoom + this.screenW / 2;
@@ -36,6 +49,7 @@ export class Camera {
   pan(dsx: number, dsy: number): void {
     this.cx -= dsx / this.zoom;
     this.cy -= dsy / this.zoom;
+    this.anim = null;
   }
 
   /** Zoom centered on a screen-space point. */
@@ -43,9 +57,9 @@ export class Camera {
     const wx = this.toWorldX(sx);
     const wy = this.toWorldY(sy);
     this.zoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.zoom * factor));
-    // Adjust center so the world point stays under the cursor.
     this.cx = wx - (sx - this.screenW / 2) / this.zoom;
     this.cy = wy - (sy - this.screenH / 2) / this.zoom;
+    this.anim = null;
   }
 
   /** Animate to fit a bounding box with padding. */
@@ -53,10 +67,48 @@ export class Camera {
     const bw = maxX - minX + padding * 2;
     const bh = maxY - minY + padding * 2;
     if (bw <= 0 || bh <= 0) return;
-    this.cx = (minX + maxX) / 2;
-    this.cy = (minY + maxY) / 2;
-    this.zoom = Math.min(this.screenW / bw, this.screenH / bh, this.maxZoom);
-    this.zoom = Math.max(this.zoom, this.minZoom);
+    const toCx = (minX + maxX) / 2;
+    const toCy = (minY + maxY) / 2;
+    let toZoom = Math.min(this.screenW / bw, this.screenH / bh, this.maxZoom);
+    toZoom = Math.max(toZoom, this.minZoom);
+    this.animateTo(toCx, toCy, toZoom);
+  }
+
+  /**
+   * Smoothly animate to a target position/zoom over `durationMs`.
+   * Call `tick()` each frame to advance. User input cancels the animation.
+   */
+  animateTo(cx: number, cy: number, zoom: number, durationMs = 300): void {
+    this.anim = {
+      fromCx: this.cx,
+      fromCy: this.cy,
+      fromZoom: this.zoom,
+      toCx: cx,
+      toCy: cy,
+      toZoom: Math.max(this.minZoom, Math.min(this.maxZoom, zoom)),
+      start: performance.now(),
+      duration: durationMs,
+    };
+  }
+
+  /**
+   * Advance the animation by one frame. Returns `true` if the camera
+   * moved (caller should re-render and re-check LOD).
+   */
+  tick(): boolean {
+    if (this.anim === null) return false;
+
+    const elapsed = performance.now() - this.anim.start;
+    const t = Math.min(elapsed / this.anim.duration, 1);
+    // Ease-out cubic.
+    const e = 1 - (1 - t) * (1 - t) * (1 - t);
+
+    this.cx = this.anim.fromCx + (this.anim.toCx - this.anim.fromCx) * e;
+    this.cy = this.anim.fromCy + (this.anim.toCy - this.anim.fromCy) * e;
+    this.zoom = this.anim.fromZoom + (this.anim.toZoom - this.anim.fromZoom) * e;
+
+    if (t >= 1) this.anim = null;
+    return true;
   }
 
   /** Current visible world-space rectangle. */
