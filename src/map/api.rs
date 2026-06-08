@@ -262,6 +262,9 @@ fn write_component(state: Arc<MapState>, body: CreateComponent) -> ApiResult {
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let hash = write.content_hash();
 
+    // Snapshot for rollback.
+    let graph_snapshot = ps.graph_index.clone();
+
     ps.graph_index.nodes.push(crate::store::schema::NodeEntry {
         name: body.name.clone(),
         kind: crate::store::schema::NodeKind::Component,
@@ -270,14 +273,19 @@ fn write_component(state: Arc<MapState>, body: CreateComponent) -> ApiResult {
     });
     ps.components.insert(body.name.clone(), comp);
 
-    let lock = state
-        .store
-        .lock()
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    state
+    let lock = state.store.lock().map_err(|e| {
+        ps.graph_index = graph_snapshot.clone();
+        ps.components.remove(&body.name);
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?;
+    if let Err(e) = state
         .store
         .commit_with_graph(&lock, vec![write], vec![], &ps)
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    {
+        ps.graph_index = graph_snapshot;
+        ps.components.remove(&body.name);
+        return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+    }
     ps.rebuild_graph();
 
     let name = body.name;
@@ -331,20 +339,22 @@ fn write_connection(state: Arc<MapState>, body: CreateConnection) -> ApiResult {
         return Err(api_err(StatusCode::CONFLICT, "connection already exists"));
     }
 
+    let graph_snapshot = ps.graph_index.clone();
+
     ps.graph_index.edges.push(crate::store::schema::EdgeEntry {
         from: body.from.clone(),
         to: body.to.clone(),
         kind: EdgeKind::ConnectsTo,
     });
 
-    let lock = state
-        .store
-        .lock()
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    state
-        .store
-        .commit_with_graph(&lock, vec![], vec![], &ps)
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let lock = state.store.lock().map_err(|e| {
+        ps.graph_index = graph_snapshot.clone();
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?;
+    if let Err(e) = state.store.commit_with_graph(&lock, vec![], vec![], &ps) {
+        ps.graph_index = graph_snapshot;
+        return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+    }
     ps.rebuild_graph();
 
     ws::broadcast(
@@ -402,9 +412,19 @@ fn amend_decision(state: Arc<MapState>, name: String, body: AmendDecision) -> Ap
     let mut ps = state.write_project_state();
     let dec = ps
         .decisions
-        .get_mut(&name)
+        .get(&name)
         .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "decision not found"))?;
 
+    // Snapshot for rollback.
+    let old_choice = dec.decision.choice.clone();
+    let old_reason = dec.decision.reason.clone();
+    let old_tags = dec.decision.tags.clone();
+    let graph_snapshot = ps.graph_index.clone();
+
+    let dec = ps
+        .decisions
+        .get_mut(&name)
+        .ok_or_else(|| api_err(StatusCode::INTERNAL_SERVER_ERROR, "decision disappeared"))?;
     if let Some(ref c) = body.choice {
         dec.decision.choice = c.clone();
     }
@@ -428,14 +448,27 @@ fn amend_decision(state: Arc<MapState>, name: String, body: AmendDecision) -> Ap
         }
     }
 
-    let lock = state
-        .store
-        .lock()
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    state
+    let lock = state.store.lock().map_err(|e| {
+        if let Some(dec) = ps.decisions.get_mut(&name) {
+            dec.decision.choice.clone_from(&old_choice);
+            dec.decision.reason.clone_from(&old_reason);
+            dec.decision.tags.clone_from(&old_tags);
+        }
+        ps.graph_index = graph_snapshot.clone();
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?;
+    if let Err(e) = state
         .store
         .commit_with_graph(&lock, vec![write], vec![], &ps)
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    {
+        if let Some(dec) = ps.decisions.get_mut(&name) {
+            dec.decision.choice = old_choice;
+            dec.decision.reason = old_reason;
+            dec.decision.tags = old_tags;
+        }
+        ps.graph_index = graph_snapshot;
+        return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+    }
     ps.rebuild_graph();
 
     ws::broadcast(
@@ -478,21 +511,30 @@ fn remove_component(state: Arc<MapState>, name: String) -> ApiResult {
         return Err(api_err(StatusCode::CONFLICT, cascade.blockers.join("; ")));
     }
 
-    ps.components.remove(&name);
+    // Snapshot for rollback.
+    let graph_snapshot = ps.graph_index.clone();
+    let comp_snapshot = ps.components.remove(&name);
+
     ps.graph_index.nodes.retain(|n| n.name != name);
     ps.graph_index
         .edges
         .retain(|e| e.from != name && e.to != name);
 
-    let lock = state
-        .store
-        .lock()
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let lock = state.store.lock().map_err(|e| {
+        ps.graph_index = graph_snapshot.clone();
+        if let Some(comp) = comp_snapshot.clone() {
+            ps.components.insert(name.clone(), comp);
+        }
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?;
     let removes = vec![state.store.component_path(&name)];
-    state
-        .store
-        .commit_with_graph(&lock, vec![], removes, &ps)
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if let Err(e) = state.store.commit_with_graph(&lock, vec![], removes, &ps) {
+        ps.graph_index = graph_snapshot;
+        if let Some(comp) = comp_snapshot {
+            ps.components.insert(name, comp);
+        }
+        return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+    }
     ps.rebuild_graph();
 
     ws::broadcast(&state.ws_tx, &[WsEvent::NodeRemoved { name: name.clone() }]);
@@ -527,21 +569,30 @@ fn remove_decision(state: Arc<MapState>, name: String) -> ApiResult {
         return Err(api_err(StatusCode::CONFLICT, cascade.blockers.join("; ")));
     }
 
-    ps.decisions.remove(&name);
+    // Snapshot for rollback.
+    let graph_snapshot = ps.graph_index.clone();
+    let dec_snapshot = ps.decisions.remove(&name);
+
     ps.graph_index.nodes.retain(|n| n.name != name);
     ps.graph_index
         .edges
         .retain(|e| e.from != name && e.to != name);
 
-    let lock = state
-        .store
-        .lock()
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let lock = state.store.lock().map_err(|e| {
+        ps.graph_index = graph_snapshot.clone();
+        if let Some(dec) = dec_snapshot.clone() {
+            ps.decisions.insert(name.clone(), dec);
+        }
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?;
     let removes = vec![state.store.decision_path(&name)];
-    state
-        .store
-        .commit_with_graph(&lock, vec![], removes, &ps)
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if let Err(e) = state.store.commit_with_graph(&lock, vec![], removes, &ps) {
+        ps.graph_index = graph_snapshot;
+        if let Some(dec) = dec_snapshot {
+            ps.decisions.insert(name, dec);
+        }
+        return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+    }
     ps.rebuild_graph();
 
     ws::broadcast(&state.ws_tx, &[WsEvent::NodeRemoved { name: name.clone() }]);
@@ -576,18 +627,20 @@ fn remove_connection(state: Arc<MapState>, from: String, to: String) -> ApiResul
         return Err(api_err(StatusCode::NOT_FOUND, "connection not found"));
     }
 
+    let graph_snapshot = ps.graph_index.clone();
+
     ps.graph_index
         .edges
         .retain(|e| !(e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo));
 
-    let lock = state
-        .store
-        .lock()
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    state
-        .store
-        .commit_with_graph(&lock, vec![], vec![], &ps)
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let lock = state.store.lock().map_err(|e| {
+        ps.graph_index = graph_snapshot.clone();
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?;
+    if let Err(e) = state.store.commit_with_graph(&lock, vec![], vec![], &ps) {
+        ps.graph_index = graph_snapshot;
+        return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+    }
     ps.rebuild_graph();
 
     ws::broadcast(

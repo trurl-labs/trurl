@@ -43,17 +43,17 @@ build-release: build-frontend
 
 # ── Format & Lint ─────────────────────────────────────────────────────────────
 
-fmt: fmt-frontend
+fmt:
 	cargo fmt --all
 	cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged -- -D warnings
 
-check: check-frontend
+check:
 	cargo fmt --all -- --check
 	cargo clippy --locked --workspace --all-targets -- -D warnings
 
 # ── Test ──────────────────────────────────────────────────────────────────────
 
-test: test-frontend
+test:
 	cargo test --workspace --locked
 
 # ── Audit ─────────────────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ audit-js: $(NODE_STAMP)
 
 # ── CI gate (run before pushing) ──────────────────────────────────────────────
 
-ci: check test audit
+ci: check check-frontend test test-frontend audit
 	@echo "  ✓ All checks passed"
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
