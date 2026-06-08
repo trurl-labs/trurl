@@ -431,25 +431,6 @@ mod tests {
     }
 
     fn empty_state() -> ProjectState {
-        use crate::store::schema::*;
-        use chrono::Utc;
-        ProjectState::new(
-            ProjectFile {
-                trurl_version: "0.2.0".into(),
-                project: Project {
-                    name: "test".into(),
-                    description: String::new(),
-                },
-            },
-            std::collections::BTreeMap::new(),
-            std::collections::BTreeMap::new(),
-            std::collections::BTreeMap::new(),
-            GraphIndex {
-                version: 1,
-                rebuilt: Utc::now(),
-                nodes: vec![],
-                edges: vec![],
-            },
-        )
+        crate::store::testing::empty_project_state()
     }
 }

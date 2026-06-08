@@ -554,6 +554,216 @@ pub(crate) mod testing {
             },
         }
     }
+
+    /// Minimal [`ProjectState`] with no components, decisions, or patterns.
+    /// The shared starting point for tests that build state incrementally.
+    pub fn empty_project_state() -> super::state::ProjectState {
+        use crate::store::schema::FORMAT_VERSION;
+        super::state::ProjectState::new(
+            ProjectFile {
+                trurl_version: FORMAT_VERSION.into(),
+                project: Project {
+                    name: "test".into(),
+                    description: String::new(),
+                },
+            },
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            GraphIndex {
+                version: 1,
+                rebuilt: Utc::now(),
+                nodes: vec![],
+                edges: vec![],
+            },
+        )
+    }
+
+    /// Full test state: auth + database + rate-limiter, 3 decisions
+    /// (use-jwt, error-strategy, db-pool), graph tags, ConnectsTo edges.
+    ///
+    /// This is the "kitchen sink" fixture for tests that need a realistic
+    /// graph without constructing one from scratch every time.
+    pub fn rich_test_state() -> super::state::ProjectState {
+        use crate::store::schema::{EdgeEntry, EdgeKind, FORMAT_VERSION, NodeKind};
+
+        let ts = Utc.with_ymd_and_hms(2025, 6, 1, 10, 0, 0).unwrap();
+
+        let mut components = BTreeMap::new();
+        for (name, desc) in [
+            ("auth", "Authentication and token management"),
+            ("database", "Database access layer"),
+            ("rate-limiter", "Request rate limiting"),
+        ] {
+            components.insert(
+                name.into(),
+                ComponentFile {
+                    component: Component {
+                        name: name.into(),
+                        description: desc.into(),
+                    },
+                },
+            );
+        }
+
+        let mut decisions = BTreeMap::new();
+        decisions.insert(
+            "use-jwt".into(),
+            DecisionFile {
+                decision: Decision {
+                    component: "auth".into(),
+                    choice: "JWT with DPoP binding".into(),
+                    reason: "Stateless, no session store needed".into(),
+                    alternatives: vec!["Session cookies — rejected: server state".into()],
+                    tags: vec![],
+                    created: ts,
+                },
+            },
+        );
+        decisions.insert(
+            "error-strategy".into(),
+            DecisionFile {
+                decision: Decision {
+                    component: "project".into(),
+                    choice: "ALL error handling MUST use Result<T, AppError>".into(),
+                    reason: "Consistent error propagation".into(),
+                    alternatives: vec![],
+                    tags: vec![],
+                    created: ts,
+                },
+            },
+        );
+        decisions.insert(
+            "db-pool".into(),
+            DecisionFile {
+                decision: Decision {
+                    component: "database".into(),
+                    choice: "Shared connection pool via app state".into(),
+                    reason: "Avoid per-request connection overhead".into(),
+                    alternatives: vec![],
+                    tags: vec![],
+                    created: ts,
+                },
+            },
+        );
+
+        let graph_index = GraphIndex {
+            version: 1,
+            rebuilt: ts,
+            nodes: vec![
+                NodeEntry {
+                    name: "project".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: String::new(),
+                },
+                NodeEntry {
+                    name: "auth".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: String::new(),
+                },
+                NodeEntry {
+                    name: "database".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: String::new(),
+                },
+                NodeEntry {
+                    name: "rate-limiter".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: String::new(),
+                },
+                NodeEntry {
+                    name: "use-jwt".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec!["auth".into(), "security".into()],
+                    hash: String::new(),
+                },
+                NodeEntry {
+                    name: "error-strategy".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: String::new(),
+                },
+                NodeEntry {
+                    name: "db-pool".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec!["storage".into()],
+                    hash: String::new(),
+                },
+            ],
+            edges: vec![
+                EdgeEntry {
+                    from: "auth".into(),
+                    to: "database".into(),
+                    kind: EdgeKind::ConnectsTo,
+                },
+                EdgeEntry {
+                    from: "rate-limiter".into(),
+                    to: "database".into(),
+                    kind: EdgeKind::ConnectsTo,
+                },
+                EdgeEntry {
+                    from: "use-jwt".into(),
+                    to: "auth".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+                EdgeEntry {
+                    from: "error-strategy".into(),
+                    to: "project".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+                EdgeEntry {
+                    from: "db-pool".into(),
+                    to: "database".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+            ],
+        };
+
+        super::state::ProjectState::new(
+            ProjectFile {
+                trurl_version: FORMAT_VERSION.into(),
+                project: Project {
+                    name: "test-project".into(),
+                    description: "A test project".into(),
+                },
+            },
+            components,
+            decisions,
+            BTreeMap::new(),
+            graph_index,
+        )
+    }
+
+    /// Create a store on disk with named components and return it loaded.
+    ///
+    /// For integration tests that need a real on-disk store without going
+    /// through the `commands` module. Components are written atomically
+    /// and state is loaded with a reconciled graph index.
+    pub fn setup_store_with_components(
+        dir: &Path,
+        components: &[(&str, &str)],
+    ) -> (Store, super::state::ProjectState) {
+        let store = setup_store(dir);
+        let lock = store.lock().unwrap();
+        for &(name, description) in components {
+            let comp = ComponentFile {
+                component: Component {
+                    name: name.into(),
+                    description: description.into(),
+                },
+            };
+            store
+                .write_atomic(&lock, &store.component_path(name), &comp)
+                .unwrap();
+        }
+        drop(lock);
+        let state = store.load_state().unwrap();
+        (store, state)
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

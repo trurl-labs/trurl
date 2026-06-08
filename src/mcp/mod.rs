@@ -194,26 +194,7 @@ mod tests {
     }
 
     fn empty_state() -> Arc<RwLock<ProjectState>> {
-        use crate::store::schema::*;
-        use chrono::Utc;
-        Arc::new(RwLock::new(ProjectState::new(
-            ProjectFile {
-                trurl_version: "0.2.0".into(),
-                project: Project {
-                    name: "test".into(),
-                    description: String::new(),
-                },
-            },
-            std::collections::BTreeMap::new(),
-            std::collections::BTreeMap::new(),
-            std::collections::BTreeMap::new(),
-            GraphIndex {
-                version: 1,
-                rebuilt: Utc::now(),
-                nodes: vec![],
-                edges: vec![],
-            },
-        )))
+        Arc::new(RwLock::new(crate::store::testing::empty_project_state()))
     }
 
     fn empty_store() -> (tempfile::TempDir, Store) {

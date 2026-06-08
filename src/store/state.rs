@@ -299,26 +299,7 @@ mod tests {
     // ── unique_decision_stem ────────────────────────────────────────────
 
     fn empty_state() -> ProjectState {
-        use crate::store::schema::*;
-        use chrono::Utc;
-        ProjectState::new(
-            ProjectFile {
-                trurl_version: FORMAT_VERSION.into(),
-                project: Project {
-                    name: "test".into(),
-                    description: String::new(),
-                },
-            },
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            GraphIndex {
-                version: 1,
-                rebuilt: Utc::now(),
-                nodes: vec![],
-                edges: vec![],
-            },
-        )
+        crate::store::testing::empty_project_state()
     }
 
     #[test]

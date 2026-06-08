@@ -325,18 +325,16 @@ pub(crate) fn record_pattern(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands;
     use crate::store::Store;
     use serde_json::json;
     use tempfile::TempDir;
 
     fn setup() -> (TempDir, Store, store::ProjectState) {
         let tmp = TempDir::new().unwrap();
-        commands::init(tmp.path()).unwrap();
-        commands::add_component(tmp.path(), "auth", Some("Authentication")).unwrap();
-        commands::add_component(tmp.path(), "database", Some("Database layer")).unwrap();
-        let store = Store::discover(tmp.path()).unwrap();
-        let state = store.load_state().unwrap();
+        let (store, state) = store::testing::setup_store_with_components(
+            tmp.path(),
+            &[("auth", "Authentication"), ("database", "Database layer")],
+        );
         (tmp, store, state)
     }
 
