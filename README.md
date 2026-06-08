@@ -7,15 +7,16 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/trurl-labs/trurl/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/trurl-labs/trurl/ci.yml?style=flat-square&label=CI" alt="CI"></a>
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License">
-  <img src="https://img.shields.io/badge/rust-1.95-orange?style=flat-square" alt="Rust">
+  <img src="https://img.shields.io/badge/rust-1.88%2B-orange?style=flat-square" alt="Rust">
   <br>
   <a href="SECURITY.md">Report a vulnerability</a> · <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 ## The Problem
 
-AI engineering is real leverage - with a real cost.
+AI engineering is real leverage, but with a real cost.
 
 You're shipping faster than ever, but you've stopped making the decisions that define your architecture - the AI makes them for you, silently, differently each time, and you approve because each diff looks reasonable in isolation. The speed is real. So is the cost: you're losing ownership of your own codebase, trading deep understanding for throughput, and accumulating technical debt that no linter will ever catch.
 
@@ -31,6 +32,8 @@ Every architectural decision is captured in a queryable graph, understood by the
 
 **An MCP server.** `trurl serve` starts a local MCP server that any AI coding tool queries. The coding agent calls Trurl to get context before implementing, to run design conversations when new patterns are needed, and to record decisions as they're made. You never leave your coding tool.
 
+**A map.** `trurl map` opens an interactive visualization of the architecture graph in the browser. Components, connections, decisions, patterns — explorable, editable, always in sync with `.trurl/`.
+
 **A CLI.** `trurl design <component>` runs a Socratic design conversation — the AI asks you questions, you think through tradeoffs, and your answers become recorded decisions. `trurl decide` records quick decisions from the terminal. Everything local, everything under 100ms.
 
 Named after Trurl from Stanisław Lem's *The Cyberiad* — the constructor who thinks deeply about what he builds before building it.
@@ -41,14 +44,14 @@ Named after Trurl from Stanisław Lem's *The Cyberiad* — the constructor who t
 cargo install trurl
 ```
 
-Requires Rust 1.88+. Toolchain pinned to 1.95 in the repo.
+Requires Rust 1.88+.
 
 ## Quick Start
 
 ```bash
 trurl init
-trurl add component auth --description "Authentication and token management"
-trurl add component database --description "Persistence layer"
+trurl add component auth -d "Authentication and token management"
+trurl add component database -d "Persistence layer"
 trurl add connection auth database
 
 # Record decisions directly
@@ -58,7 +61,7 @@ trurl decide auth --choice "JWT with DPoP binding" --reason "Stateless, no sessi
 # Or run a guided design conversation
 trurl design auth
 
-# Start the MCP server
+# Start the MCP server for AI coding agents
 trurl serve
 ```
 
@@ -72,6 +75,8 @@ trurl serve
 | `check_pattern` | Check if an approach is covered by existing decisions |
 | `get_architecture` | Full system overview: components, connections, patterns |
 | `get_design_prompt` | Structured prompt for design conversations (full/quick/learn/review) |
+| `add_component` | Add a new component to the architecture graph |
+| `add_connection` | Add a directional connection between components |
 | `record_decision` | Record a decision with edges, tags, alternatives |
 | `record_pattern` | Record a pattern synthesized from multiple decisions |
 | `update_decision` | Amend (typo fix) or supersede (substantive change) |
@@ -92,7 +97,7 @@ This project uses Trurl for architectural decisions.
 1. Before implementing any task, call `check_pattern` with a description of what you're about to do.
 2. If `covered`: call `get_context` and follow the brief as authoritative constraints.
 3. If `not_covered`: call `get_design_prompt` and run the design conversation with the user before implementing.
-4. During design conversations, call `record_decision` for each choice the user makes.
+4. During design conversations, use `add_component` / `add_connection` for graph structure and `record_decision` for each choice the user makes.
 5. After design, call `get_context` for the implementation brief.
 6. Never introduce a new pattern, dependency, or architectural approach without checking Trurl first.
 
@@ -106,7 +111,7 @@ When Trurl's design prompt includes comprehension checkpoints, you MUST ask the 
 When the agent calls `get_context("rate-limiter")`:
 
 ```
-RULES:
+RULES (inviolable — every generated line must respect these):
 - ALL error handling MUST use Result<T, AppError>
 - ALL persistent state MUST use Redis
 
@@ -121,6 +126,11 @@ PATTERNS:
 RELATED:
 - auth: JWT with DPoP, rate limiter runs AFTER auth
 
+OVERRIDE POLICY:
+RULES are inviolable. Component decisions are strong defaults —
+follow them unless the user explicitly revises them in a design session.
+Never silently deviate from either.
+
 WHEN UNCERTAIN:
 STOP. This introduces a new pattern. Ask the user to design it first.
 ```
@@ -131,9 +141,9 @@ STOP. This introduces a new pattern. Ask the user to design it first.
 
 | Mode | When | Depth |
 |------|------|-------|
-| `full` | New component or major feature | Multi-phase: scope → technical choices → pattern recognition → summary checkpoint. Comprehension gates after each decision. |
-| `quick` | Small addition to existing component | 1–3 targeted questions. Single gate only if a new decision was recorded. |
-| `learn` | Studying existing design | All decisions with challenge questions. No implementation. |
+| `full` | New component or major feature | Multi-phase: scope → technical choices → pattern recognition → summary checkpoint. Dynamic concern tracking shows what's covered and what needs exploration. Comprehension gates after each decision. |
+| `quick` | Small addition to existing component | Presents all active constraints for confirmation, then checks for new decisions. |
+| `learn` | Studying existing design | All decisions with challenge questions. Probes for unrecorded decisions. No implementation. |
 | `review` | Periodic health check | Decisions sorted oldest-first. "Does this still hold?" |
 
 ## The `.trurl/` Directory
@@ -179,6 +189,7 @@ trurl add connection <from> <to>            Connect two components
 trurl rename component <old> <new>          Rename, updating all references
 trurl remove component <name>               Remove (refuses if decisions reference it)
 trurl remove decision <name>                Remove (refuses if depended on)
+trurl remove connection <from> <to>         Remove a connection
 trurl decide <component> --choice "..." --reason "..."
       [--supersede <name>] [-a "..."]       Quick decision recording
 trurl design <component>                    Socratic design conversation
@@ -186,6 +197,7 @@ trurl design <component>                    Socratic design conversation
       [-p anthropic|openai|openrouter]
       [-m <model>]
 trurl serve                                 Start MCP server (stdio)
+trurl map [--port <n>] [--no-open]          Open interactive map in browser
 trurl status                                Component/decision/pattern counts
 trurl check                                 Validate graph integrity
 trurl check --rebuild                       Force-rebuild graph.toml from files
