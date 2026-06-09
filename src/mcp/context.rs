@@ -60,7 +60,7 @@ pub(crate) fn get_context(
         .map(|(_, d)| *d)
         .collect();
     let (covered_concerns, uncovered_concerns) =
-        super::prompts::compute_concern_coverage(&coverage_decisions);
+        crate::workflow::concerns::compute_concern_coverage(&coverage_decisions);
 
     let status = if !component_decisions.is_empty() {
         "covered"
@@ -220,7 +220,7 @@ fn build_brief(
 
     // Degradation warning: when more concerns are uncovered than covered,
     // the design is incomplete and the agent should proceed with caution.
-    let covered_count = super::prompts::CONCERNS.len() - uncovered_concerns.len();
+    let covered_count = crate::workflow::concerns::CONCERNS.len() - uncovered_concerns.len();
     if uncovered_concerns.len() > covered_count {
         brief.push_str(&format!(
             "\u{26a0} DESIGN INCOMPLETE \u{2014} {} concern areas have no decisions:\n  {}\n\n\
@@ -435,7 +435,8 @@ pub(crate) fn get_architecture(state: &ProjectState) -> Value {
                 .copied()
                 .chain(comp_decisions.iter().map(|(_, d)| *d))
                 .collect();
-            let (covered, uncovered) = super::prompts::compute_concern_coverage(&all_decs);
+            let (covered, uncovered) =
+                crate::workflow::concerns::compute_concern_coverage(&all_decs);
 
             serde_json::json!({
                 "name": name,
@@ -554,7 +555,7 @@ fn build_brief_compact(
 ) -> String {
     let mut brief = String::with_capacity(256);
 
-    let covered_count = super::prompts::CONCERNS.len() - uncovered_concerns.len();
+    let covered_count = crate::workflow::concerns::CONCERNS.len() - uncovered_concerns.len();
     if uncovered_concerns.len() > covered_count {
         brief.push_str(&format!(
             "\u{26a0} DESIGN INCOMPLETE \u{2014} {} concern areas have no decisions:\n  {}\n\n",

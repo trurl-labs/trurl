@@ -1,0 +1,362 @@
+//! Concern tracking and coverage computation.
+//!
+//! Architectural concern areas with keyword matching for determining which
+//! areas of a component's design are covered by existing decisions. Used by
+//! the advance state machine, context assembly, and prompt builders.
+//!
+//! **Array order IS priority order.** Priority determines the `focus` field
+//! in `CoverConcerns` steps — the most dangerous gaps are addressed first.
+
+use crate::store::schema::DecisionFile;
+
+// ── Concern areas ─────────────────────────────────────────────────────────
+
+/// Architectural concern areas and keywords for matching against decision
+/// content.
+///
+/// Array order IS priority order. Security-critical gaps surface before
+/// stylistic ones. This ordering drives the `focus` list in advance
+/// responses so the agent addresses the most dangerous gaps first.
+pub const CONCERNS: &[(&str, &[&str])] = &[
+    (
+        "Security boundaries",
+        &[
+            "security",
+            "auth",
+            "authentication",
+            "authorization",
+            "token",
+            "permission",
+            "trust",
+            "encrypt",
+            "encryption",
+            "secret",
+            "credential",
+            "tls",
+            "certificate",
+            "zeroize",
+        ],
+    ),
+    (
+        "Error handling & failure modes",
+        &[
+            "error", "errors", "fail", "failure", "panic", "result", "recovery", "retry",
+            "graceful", "crash", "fault", "fallback",
+        ],
+    ),
+    (
+        "Concurrency & locking",
+        &[
+            "lock",
+            "locking",
+            "concurrent",
+            "concurrency",
+            "mutex",
+            "rwlock",
+            "atomic",
+            "thread",
+            "async",
+            "parallel",
+            "race",
+            "deadlock",
+            "flock",
+        ],
+    ),
+    (
+        "Integrity & validation",
+        &[
+            "hash",
+            "hashing",
+            "validate",
+            "validation",
+            "integrity",
+            "verify",
+            "blake3",
+            "sha256",
+            "checksum",
+            "corrupt",
+            "consistency",
+        ],
+    ),
+    (
+        "Performance constraints",
+        &[
+            "performance",
+            "latency",
+            "throughput",
+            "cache",
+            "caching",
+            "memory",
+            "speed",
+            "budget",
+            "target",
+            "millisecond",
+            "benchmark",
+            "optimize",
+        ],
+    ),
+    (
+        "External interfaces & APIs",
+        &[
+            "api",
+            "interface",
+            "endpoint",
+            "protocol",
+            "http",
+            "rpc",
+            "mcp",
+            "rest",
+            "grpc",
+            "websocket",
+            "boundary",
+            "stdio",
+        ],
+    ),
+    (
+        "Storage & persistence",
+        &[
+            "storage",
+            "file",
+            "disk",
+            "persist",
+            "persistence",
+            "write",
+            "read",
+            "database",
+            "redis",
+            "save",
+            "load",
+            "filesystem",
+        ],
+    ),
+    (
+        "Data format & serialization",
+        &[
+            "format",
+            "toml",
+            "json",
+            "yaml",
+            "serialize",
+            "deserialize",
+            "schema",
+            "encoding",
+            "parse",
+            "marshal",
+            "protobuf",
+        ],
+    ),
+    (
+        "Dependencies & coupling",
+        &[
+            "dependency",
+            "dependencies",
+            "crate",
+            "library",
+            "coupling",
+            "vendor",
+            "package",
+            "module",
+        ],
+    ),
+    (
+        "Migration & versioning",
+        &[
+            "migration",
+            "migrate",
+            "version",
+            "versioning",
+            "upgrade",
+            "backward",
+            "compatibility",
+            "breaking",
+        ],
+    ),
+];
+
+// ── Matching ──────────────────────────────────────────────────────────────
+
+/// Check if a decision's content matches any keyword for a concern area.
+///
+/// Uses word-boundary matching to avoid substring false positives
+/// (e.g. "format" does not match inside "information").
+pub fn decision_covers_concern(dec: &DecisionFile, keywords: &[&str]) -> bool {
+    let text = format!(
+        "{} {} {}",
+        dec.decision.choice,
+        dec.decision.reason,
+        dec.decision.tags.join(" "),
+    );
+    let words: Vec<String> = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 2)
+        .map(|w| w.to_lowercase())
+        .collect();
+    keywords.iter().any(|kw| words.iter().any(|w| w == kw))
+}
+
+// ── Coverage computation ──────────────────────────────────────────────────
+
+/// Structured concern coverage for a set of decisions.
+///
+/// Returns `(covered, uncovered)` concern names. Used by `advance`,
+/// `get_context`, and `get_architecture` to surface per-component
+/// design gaps.
+pub fn compute_concern_coverage(
+    decisions: &[&DecisionFile],
+) -> (Vec<&'static str>, Vec<&'static str>) {
+    let mut covered = Vec::new();
+    let mut uncovered = Vec::new();
+
+    for &(name, keywords) in CONCERNS {
+        if decisions
+            .iter()
+            .any(|d| decision_covers_concern(d, keywords))
+        {
+            covered.push(name);
+        } else {
+            uncovered.push(name);
+        }
+    }
+
+    (covered, uncovered)
+}
+
+/// Formatted concern status for inclusion in prompts.
+///
+/// Shows covered areas (with the decision choices that cover them) and
+/// uncovered areas (for the agent to systematically explore).
+pub fn concern_status(decisions: &[&DecisionFile]) -> String {
+    let mut covered: Vec<(&str, Vec<&str>)> = Vec::new();
+    let mut uncovered: Vec<&str> = Vec::new();
+
+    for &(concern_name, keywords) in CONCERNS {
+        let matching: Vec<&str> = decisions
+            .iter()
+            .filter(|d| decision_covers_concern(d, keywords))
+            .map(|d| d.decision.choice.as_str())
+            .collect();
+
+        if matching.is_empty() {
+            uncovered.push(concern_name);
+        } else {
+            covered.push((concern_name, matching));
+        }
+    }
+
+    let mut out = String::new();
+
+    if !covered.is_empty() {
+        out.push_str("COVERED (decisions exist — do not re-ask):\n");
+        for (name, choices) in &covered {
+            out.push_str(&format!("  ✓ {name}: \"{}\"\n", choices.join("\", \"")));
+        }
+        out.push('\n');
+    }
+
+    if !uncovered.is_empty() {
+        out.push_str("UNCOVERED (systematically ask about each):\n");
+        for name in &uncovered {
+            out.push_str(&format!("  □ {name}\n"));
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::schema::Decision;
+    use chrono::{TimeZone, Utc};
+
+    fn make_decision(component: &str, choice: &str, reason: &str, tags: &[&str]) -> DecisionFile {
+        DecisionFile {
+            decision: Decision {
+                component: component.into(),
+                choice: choice.into(),
+                reason: reason.into(),
+                alternatives: vec![],
+                tags: tags.iter().map(|t| (*t).into()).collect(),
+                created: Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap(),
+            },
+        }
+    }
+
+    #[test]
+    fn security_keywords_match() {
+        let dec = make_decision(
+            "auth",
+            "JWT with DPoP binding",
+            "Token security",
+            &["security"],
+        );
+        let security_kw = CONCERNS
+            .iter()
+            .find(|(name, _)| *name == "Security boundaries")
+            .map(|(_, kw)| *kw)
+            .unwrap();
+        assert!(decision_covers_concern(&dec, security_kw));
+    }
+
+    #[test]
+    fn no_false_positives_across_concerns() {
+        let dec = make_decision("auth", "JWT tokens", "Stateless", &[]);
+        let concurrency_kw = CONCERNS
+            .iter()
+            .find(|(name, _)| *name == "Concurrency & locking")
+            .map(|(_, kw)| *kw)
+            .unwrap();
+        assert!(!decision_covers_concern(&dec, concurrency_kw));
+    }
+
+    #[test]
+    fn coverage_partitions_all_concerns() {
+        let security_dec = make_decision("auth", "JWT with DPoP", "Token security", &["security"]);
+        let error_dec = make_decision(
+            "project",
+            "Result<T, AppError>",
+            "Consistent error propagation",
+            &[],
+        );
+        let (covered, uncovered) = compute_concern_coverage(&[&security_dec, &error_dec]);
+
+        assert!(covered.contains(&"Security boundaries"));
+        assert!(covered.contains(&"Error handling & failure modes"));
+        assert!(uncovered.contains(&"Concurrency & locking"));
+        assert_eq!(covered.len() + uncovered.len(), CONCERNS.len());
+    }
+
+    #[test]
+    fn concern_status_shows_both_sections() {
+        let dec = make_decision("store", "BLAKE3 content hashing", "Fast integrity", &[]);
+        let output = concern_status(&[&dec]);
+
+        assert!(output.contains("COVERED"));
+        assert!(output.contains("Integrity"));
+        assert!(output.contains("UNCOVERED"));
+        assert!(output.contains("Concurrency"));
+    }
+
+    #[test]
+    fn empty_decisions_all_uncovered() {
+        let (covered, uncovered) = compute_concern_coverage(&[]);
+        assert!(covered.is_empty());
+        assert_eq!(uncovered.len(), CONCERNS.len());
+    }
+
+    #[test]
+    fn word_boundary_prevents_substring_match() {
+        // "format" in "information" must not match Data format concern.
+        let dec = make_decision("api", "Return information payload", "User data", &[]);
+        let format_kw = CONCERNS
+            .iter()
+            .find(|(name, _)| *name == "Data format & serialization")
+            .map(|(_, kw)| *kw)
+            .unwrap();
+        // "information" splits into ["information"] — not "format".
+        assert!(!decision_covers_concern(&dec, format_kw));
+    }
+}

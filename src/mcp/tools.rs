@@ -2,12 +2,11 @@ use std::sync::LazyLock;
 
 use serde_json::Value;
 
-use crate::store::{ProjectState, Store};
-
-use super::advance;
 use super::context;
 use super::prompts;
 use super::{update, write};
+use crate::store::{ProjectState, Store};
+use crate::workflow;
 
 // ── Tool definitions ────────────────────────────────────────────────────────
 
@@ -19,7 +18,7 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
         "tools": [
             {
                 "name": "advance",
-                "description": "Compute the workflow state for a component \
+                "description": "Compute the workflow step for a component \
                     and return the next action. Call before acting on a \
                     component and after completing each action. The returned \
                     `ready` field is the only signal that implementation \
@@ -31,13 +30,24 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
                             "type": "string",
                             "description": "Component name (kebab-case) or 'project'."
                         },
-                        "intent": {
+                        "task_type": {
                             "type": "string",
-                            "enum": ["implement", "learn", "review"],
-                            "description": "implement (default): full readiness check — \
-                                routes through design until coverage is adequate. \
-                                learn: study existing decisions regardless of coverage. \
-                                review: challenge decisions for drift."
+                            "enum": [
+                                "new_component",
+                                "feature",
+                                "fix",
+                                "learn",
+                                "review",
+                                "harden"
+                            ],
+                            "description": "What the developer wants to accomplish. \
+                                Inferred from graph state if omitted. \
+                                new_component: build from scratch. \
+                                feature: add to existing component. \
+                                fix: apply a bugfix. \
+                                learn: study existing decisions. \
+                                review: challenge decisions for drift. \
+                                harden: strengthen coverage gaps."
                         },
                         "task": {
                             "type": "string",
@@ -416,9 +426,15 @@ fn dispatch_advance(state: &ProjectState, args: &Value) -> Value {
         Some(c) => c,
         None => return tool_error("missing required parameter: component"),
     };
-    let intent = args.get("intent").and_then(|v| v.as_str());
+    let task_type = match args.get("task_type").and_then(|v| v.as_str()) {
+        Some(s) => match workflow::TaskType::parse(s) {
+            Ok(tt) => Some(tt),
+            Err(msg) => return tool_error(&msg),
+        },
+        None => None,
+    };
     let task = args.get("task").and_then(|v| v.as_str());
-    match advance::advance(state, component, intent, task) {
+    match workflow::advance::advance(state, component, task_type, task) {
         Ok(result) => tool_result(&result),
         Err(msg) => tool_error(&msg),
     }
