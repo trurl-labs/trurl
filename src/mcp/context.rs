@@ -295,7 +295,10 @@ fn build_brief(
     );
 
     brief.push_str("WHEN UNCERTAIN:\n");
-    brief.push_str("STOP. This introduces a new pattern. Ask the user to design it first.\n");
+    brief.push_str(
+        "STOP. Call check_pattern to verify coverage. If not covered,\n\
+         ask the user to design it first. Never silently deviate.\n",
+    );
 
     brief
 }
@@ -857,7 +860,8 @@ mod tests {
 
         assert!(brief.contains("WHEN UNCERTAIN:"));
         assert!(brief.contains("STOP"));
-        assert!(brief.contains("Ask the user to design it first"));
+        assert!(brief.contains("check_pattern"));
+        assert!(brief.contains("Never silently deviate"));
     }
 
     #[test]

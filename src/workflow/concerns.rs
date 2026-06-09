@@ -35,13 +35,31 @@ pub const CONCERNS: &[(&str, &[&str])] = &[
             "tls",
             "certificate",
             "zeroize",
+            "sanitize",
+            "injection",
+            "vulnerability",
         ],
     ),
     (
         "Error handling & failure modes",
         &[
-            "error", "errors", "fail", "failure", "panic", "result", "recovery", "retry",
-            "graceful", "crash", "fault", "fallback",
+            "error",
+            "errors",
+            "fail",
+            "failure",
+            "panic",
+            "result",
+            "recovery",
+            "retry",
+            "graceful",
+            "crash",
+            "fault",
+            "fallback",
+            "timeout",
+            "overflow",
+            "abort",
+            "exception",
+            "hang",
         ],
     ),
     (
@@ -60,6 +78,8 @@ pub const CONCERNS: &[(&str, &[&str])] = &[
             "race",
             "deadlock",
             "flock",
+            "channel",
+            "contention",
         ],
     ),
     (
@@ -76,6 +96,8 @@ pub const CONCERNS: &[(&str, &[&str])] = &[
             "checksum",
             "corrupt",
             "consistency",
+            "invariant",
+            "assertion",
         ],
     ),
     (
@@ -93,6 +115,10 @@ pub const CONCERNS: &[(&str, &[&str])] = &[
             "millisecond",
             "benchmark",
             "optimize",
+            "timeout",
+            "leak",
+            "allocation",
+            "slow",
         ],
     ),
     (
@@ -358,5 +384,98 @@ mod tests {
             .unwrap();
         // "information" splits into ["information"] — not "format".
         assert!(!decision_covers_concern(&dec, format_kw));
+    }
+
+    // ── Expanded keyword coverage ─────────────────────────────────────
+
+    /// Helper: find keywords for a concern area by substring match on name.
+    fn keywords_for(concern_substr: &str) -> &'static [&'static str] {
+        CONCERNS
+            .iter()
+            .find(|(name, _)| name.contains(concern_substr))
+            .map(|(_, kw)| *kw)
+            .unwrap_or_else(|| panic!("no concern area containing '{concern_substr}'"))
+    }
+
+    #[test]
+    fn expanded_security_keywords() {
+        let kw = keywords_for("Security");
+        for term in &["sanitize", "injection", "vulnerability"] {
+            let dec = make_decision("web", term, "Security fix", &[]);
+            assert!(
+                decision_covers_concern(&dec, kw),
+                "'{term}' should match Security boundaries"
+            );
+        }
+    }
+
+    #[test]
+    fn expanded_error_handling_keywords() {
+        let kw = keywords_for("Error handling");
+        for term in &["timeout", "overflow", "abort", "exception", "hang"] {
+            let dec = make_decision("api", term, "Error fix", &[]);
+            assert!(
+                decision_covers_concern(&dec, kw),
+                "'{term}' should match Error handling"
+            );
+        }
+    }
+
+    #[test]
+    fn expanded_concurrency_keywords() {
+        let kw = keywords_for("Concurrency");
+        for term in &["channel", "contention"] {
+            let dec = make_decision("bus", term, "Concurrency fix", &[]);
+            assert!(
+                decision_covers_concern(&dec, kw),
+                "'{term}' should match Concurrency"
+            );
+        }
+    }
+
+    #[test]
+    fn expanded_integrity_keywords() {
+        let kw = keywords_for("Integrity");
+        for term in &["invariant", "assertion"] {
+            let dec = make_decision("store", term, "Integrity fix", &[]);
+            assert!(
+                decision_covers_concern(&dec, kw),
+                "'{term}' should match Integrity"
+            );
+        }
+    }
+
+    #[test]
+    fn expanded_performance_keywords() {
+        let kw = keywords_for("Performance");
+        for term in &["timeout", "leak", "allocation", "slow"] {
+            let dec = make_decision("api", term, "Performance fix", &[]);
+            assert!(
+                decision_covers_concern(&dec, kw),
+                "'{term}' should match Performance"
+            );
+        }
+    }
+
+    #[test]
+    fn timeout_matches_both_error_and_performance() {
+        let dec = make_decision("api", "Request timeout handling", "Timeout fix", &[]);
+        let error_kw = keywords_for("Error handling");
+        let perf_kw = keywords_for("Performance");
+        assert!(decision_covers_concern(&dec, error_kw));
+        assert!(decision_covers_concern(&dec, perf_kw));
+    }
+
+    #[test]
+    fn expanded_keywords_no_cross_contamination() {
+        // "injection" is Security, not Concurrency.
+        let dec = make_decision("web", "SQL injection", "Security", &[]);
+        let concurrency_kw = keywords_for("Concurrency");
+        assert!(!decision_covers_concern(&dec, concurrency_kw));
+
+        // "channel" is Concurrency, not Security.
+        let dec = make_decision("bus", "Message channel", "Messaging", &[]);
+        let security_kw = keywords_for("Security");
+        assert!(!decision_covers_concern(&dec, security_kw));
     }
 }

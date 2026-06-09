@@ -215,9 +215,7 @@ fn deduce_step(
         TaskType::Feature => {
             deduce_feature(decisions, covered, uncovered, patterns, task, completed)
         }
-        TaskType::Fix => deduce_fix(
-            decisions, covered, uncovered, graph, component, task, completed,
-        ),
+        TaskType::Fix => deduce_fix(decisions, uncovered, graph, component, task, completed),
         TaskType::Learn => deduce_learn(decisions, patterns),
         TaskType::Review => {
             deduce_review(decisions, stale, covered, uncovered, patterns, completed)
@@ -354,7 +352,6 @@ fn task_relevant_concerns<'a>(uncovered: &[&'a str], task: &str) -> Vec<&'a str>
 /// `completed_steps` handles progression.
 fn deduce_fix(
     decisions: &[(&Arc<str>, &DecisionFile)],
-    _covered: &[&str],
     uncovered: &[&str],
     graph: &crate::store::graph::InMemoryGraph,
     component: &str,
