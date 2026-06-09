@@ -51,30 +51,15 @@ pub fn decide(
 pub fn remove_decision(cwd: &Path, name: &str) -> Result<()> {
     let (store, lock, mut state) = open_store_mut(cwd)?;
 
-    if !state.decisions.contains_key(name) {
-        return Err(Error::DecisionNotFound(name.into()));
-    }
-
-    let cascade = state.graph.check_decision_cascade(name);
-
+    let cascade = state.graph().check_decision_cascade(name);
     if cascade.is_blocked() {
         return Err(Error::CascadeBlocked(cascade.blocker_summary()));
     }
-
     for w in &cascade.warnings {
         eprintln!("warning: {}", w.message);
     }
 
-    // Apply removal.
-    state.decisions.remove(name);
-    state.graph_index.nodes.retain(|n| n.name != name);
-    state
-        .graph_index
-        .edges
-        .retain(|e| e.from != name && e.to != name);
-
-    let removes = vec![store.decision_path(name)];
-    store.commit_with_graph(&lock, vec![], removes, &mut state)?;
+    store.remove_decision(&lock, &mut state, name)?;
     println!("Removed decision `{name}`");
     Ok(())
 }

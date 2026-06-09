@@ -41,7 +41,7 @@ pub fn build_step_prompt(
         return Err(format!("component `{component}` does not exist"));
     }
 
-    let graph = &state.graph;
+    let graph = state.graph();
     let decisions = graph.decisions_for(component);
     let project_rules = graph.project_decisions();
     let patterns = graph.patterns_for(component);

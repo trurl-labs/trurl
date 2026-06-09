@@ -129,7 +129,7 @@ pub(super) fn require_str_array(args: &Value, key: &str) -> Result<Vec<String>, 
 // ── validate_consistency ────────────────────────────────────────────────────
 
 pub(crate) fn validate_consistency(state: &store::ProjectState) -> Value {
-    let issues = state.graph.validate();
+    let issues = state.graph().validate();
     let valid = issues.iter().all(|i| i.severity != Severity::Error);
 
     serde_json::json!({
@@ -231,7 +231,7 @@ pub(crate) fn record_decision(
         );
     }
     if let Some(sup) = supersedes {
-        for (pat_name, _) in state.graph.patterns_containing(sup) {
+        for (pat_name, _) in state.graph().patterns_containing(sup) {
             warnings.push(format!(
                 "superseded decision `{sup}` is referenced by pattern `{pat_name}`"
             ));
@@ -376,8 +376,8 @@ fn detect_pattern_opportunity(state: &store::ProjectState, new_stem: &str) -> Va
 
     // Collect decisions already in a pattern with the new decision.
     let mut co_patterned: HashSet<&str> = HashSet::new();
-    for (pat_name, _) in state.graph.patterns_containing(new_stem) {
-        for (member, _) in state.graph.decisions_for_pattern(pat_name) {
+    for (pat_name, _) in state.graph().patterns_containing(new_stem) {
+        for (member, _) in state.graph().decisions_for_pattern(pat_name) {
             co_patterned.insert(member);
         }
     }

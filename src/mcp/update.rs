@@ -20,7 +20,7 @@ pub(crate) fn remove_decision(
     }
 
     // Cascade analysis via the shared graph method.
-    let cascade = state.graph.check_decision_cascade(name);
+    let cascade = state.graph().check_decision_cascade(name);
 
     if cascade.is_blocked() {
         return Ok(serde_json::json!({
@@ -143,7 +143,7 @@ fn amend_decision(
         .map_err(|e| e.to_string())?;
 
     // Collect affected patterns and decisions.
-    let (affected_patterns, affected_decisions) = collect_affected(&state.graph, name);
+    let (affected_patterns, affected_decisions) = collect_affected(state.graph(), name);
 
     Ok(serde_json::json!({
         "name": name,
@@ -191,7 +191,7 @@ fn supersede_decision(
     let new_name = result["name"].as_str().unwrap_or_default();
 
     // Collect affected info from the OLD decision.
-    let (affected_patterns, affected_decisions) = collect_affected(&state.graph, old_name);
+    let (affected_patterns, affected_decisions) = collect_affected(state.graph(), old_name);
 
     Ok(serde_json::json!({
         "name": new_name,

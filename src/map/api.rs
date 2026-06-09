@@ -92,7 +92,7 @@ type ApiResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
 pub(crate) async fn get_graph(State(state): State<Arc<MapState>>) -> ApiResult {
     let ps = state.read_project_state();
     let layout = state.read_layout();
-    let graph = &ps.graph;
+    let graph = ps.graph();
 
     let components: Vec<Value> = ps
         .components
@@ -241,11 +241,11 @@ fn write_component(state: Arc<MapState>, body: CreateComponent) -> ApiResult {
     check_field_len("name", &body.name)?;
     check_field_len("description", &body.description)?;
 
-    let mut ps = state.write_project_state();
     let lock = state
         .store
-        .lock()
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .try_lock()
+        .map_err(|e| api_err(StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?;
+    let mut ps = state.write_project_state();
     state
         .store
         .add_component(&lock, &mut ps, &body.name, &body.description)
@@ -282,11 +282,11 @@ fn write_connection(state: Arc<MapState>, body: CreateConnection) -> ApiResult {
     check_field_len("from", &body.from)?;
     check_field_len("to", &body.to)?;
 
-    let mut ps = state.write_project_state();
     let lock = state
         .store
-        .lock()
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .try_lock()
+        .map_err(|e| api_err(StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?;
+    let mut ps = state.write_project_state();
     state
         .store
         .add_connection(&lock, &mut ps, &body.from, &body.to)
@@ -350,11 +350,11 @@ fn amend_decision(state: Arc<MapState>, name: String, body: AmendDecision) -> Ap
         tags: body.tags.as_deref(),
     };
 
-    let mut ps = state.write_project_state();
     let lock = state
         .store
-        .lock()
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .try_lock()
+        .map_err(|e| api_err(StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?;
+    let mut ps = state.write_project_state();
     state
         .store
         .amend_decision(&lock, &mut ps, &name, params)
@@ -389,21 +389,21 @@ pub(crate) async fn delete_component(
 }
 
 fn remove_component(state: Arc<MapState>, name: String) -> ApiResult {
+    let lock = state
+        .store
+        .try_lock()
+        .map_err(|e| api_err(StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?;
     let mut ps = state.write_project_state();
 
     if !ps.components.contains_key(&name) {
         return Err(api_err(StatusCode::NOT_FOUND, "component not found"));
     }
 
-    let cascade = ps.graph.check_component_cascade(&name);
+    let cascade = ps.graph().check_component_cascade(&name);
     if cascade.is_blocked() {
         return Err(api_err(StatusCode::CONFLICT, cascade.blocker_summary()));
     }
 
-    let lock = state
-        .store
-        .lock()
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     state
         .store
         .remove_component(&lock, &mut ps, &name)
@@ -430,21 +430,21 @@ pub(crate) async fn delete_decision(
 }
 
 fn remove_decision(state: Arc<MapState>, name: String) -> ApiResult {
+    let lock = state
+        .store
+        .try_lock()
+        .map_err(|e| api_err(StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?;
     let mut ps = state.write_project_state();
 
     if !ps.decisions.contains_key(&name) {
         return Err(api_err(StatusCode::NOT_FOUND, "decision not found"));
     }
 
-    let cascade = ps.graph.check_decision_cascade(&name);
+    let cascade = ps.graph().check_decision_cascade(&name);
     if cascade.is_blocked() {
         return Err(api_err(StatusCode::CONFLICT, cascade.blocker_summary()));
     }
 
-    let lock = state
-        .store
-        .lock()
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     state
         .store
         .remove_decision(&lock, &mut ps, &name)
@@ -471,11 +471,11 @@ pub(crate) async fn delete_connection(
 }
 
 fn remove_connection(state: Arc<MapState>, from: String, to: String) -> ApiResult {
-    let mut ps = state.write_project_state();
     let lock = state
         .store
-        .lock()
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .try_lock()
+        .map_err(|e| api_err(StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?;
+    let mut ps = state.write_project_state();
     state
         .store
         .remove_connection(&lock, &mut ps, &from, &to)

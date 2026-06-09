@@ -36,7 +36,7 @@ pub(crate) fn get_context(
     task_description: Option<&str>,
     depth: ContextDepth,
 ) -> Result<Value, String> {
-    let graph = &state.graph;
+    let graph = state.graph();
 
     if component == "project" {
         return Ok(project_context(state, graph, task_description));
@@ -318,7 +318,7 @@ pub(crate) fn check_pattern(state: &ProjectState, description: &str) -> Value {
         });
     }
 
-    let graph = &state.graph;
+    let graph = state.graph();
 
     struct Match<'a> {
         score: usize,
@@ -416,7 +416,7 @@ pub(crate) fn check_pattern(state: &ProjectState, description: &str) -> Value {
 // ── get_architecture ─────────────────────────────────────────────────────
 
 pub(crate) fn get_architecture(state: &ProjectState) -> Value {
-    let graph = &state.graph;
+    let graph = state.graph();
 
     // Pre-compute project rules (shared across all components for coverage).
     let project_rules = graph.project_decisions();
@@ -708,7 +708,7 @@ fn suggest_component_for<'a>(state: &'a ProjectState, query_words: &[String]) ->
             continue;
         }
 
-        let dec_count = state.graph.decisions_for(name).len();
+        let dec_count = state.graph().decisions_for(name).len();
         let dominated = best
             .as_ref()
             .is_some_and(|(_, bs, bd)| *bs > score || (*bs == score && *bd <= dec_count));

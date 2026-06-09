@@ -71,7 +71,7 @@ pub fn advance(
 
     // ── Compute state from graph ──────────────────────────────────────
 
-    let graph = &state.graph;
+    let graph = state.graph();
     let decisions = graph.decisions_for(component);
     let project_rules = graph.project_decisions();
 
@@ -463,7 +463,7 @@ fn advance_project(
     task: Option<&str>,
     completed_steps: &[&str],
 ) -> Value {
-    let graph = &state.graph;
+    let graph = state.graph();
     let decisions = graph.project_decisions();
     let has_decisions = !decisions.is_empty();
     let has_patterns = !state.patterns.is_empty();

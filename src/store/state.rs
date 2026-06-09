@@ -20,10 +20,10 @@ pub struct ProjectState {
     pub decisions: BTreeMap<String, DecisionFile>,
     pub patterns: BTreeMap<String, PatternFile>,
     pub graph_index: GraphIndex,
-    /// Cached in-memory graph, built at construction. Kept in sync by
+    /// Cached in-memory graph. Kept in sync by
     /// [`Store::commit_with_graph`], which assigns the validated graph
-    /// on successful commit.
-    pub graph: InMemoryGraph,
+    /// on successful commit. Writable only from within `store/`.
+    pub(super) graph: InMemoryGraph,
 }
 
 impl ProjectState {
@@ -44,6 +44,12 @@ impl ProjectState {
             graph_index,
             graph,
         }
+    }
+
+    /// Read-only access to the cached in-memory graph.
+    #[must_use]
+    pub fn graph(&self) -> &InMemoryGraph {
+        &self.graph
     }
 
     /// Validate against the cached graph. Only valid on freshly-loaded state;
@@ -109,7 +115,7 @@ impl ProjectState {
     /// pushes that happened after the checkpoint.
     ///
     /// Use [`rollback_graph`](Self::rollback_graph) on commit failure.
-    pub(crate) fn graph_checkpoint(&self) -> GraphCheckpoint {
+    pub(super) fn graph_checkpoint(&self) -> GraphCheckpoint {
         GraphCheckpoint {
             nodes_len: self.graph_index.nodes.len(),
             edges_len: self.graph_index.edges.len(),
@@ -117,7 +123,7 @@ impl ProjectState {
     }
 
     /// Roll back appended nodes and edges to a checkpoint.
-    pub(crate) fn rollback_graph(&mut self, cp: GraphCheckpoint) {
+    pub(super) fn rollback_graph(&mut self, cp: GraphCheckpoint) {
         self.graph_index.nodes.truncate(cp.nodes_len);
         self.graph_index.edges.truncate(cp.edges_len);
     }
@@ -128,7 +134,7 @@ impl ProjectState {
     /// failure via [`restore_graph_node`](Self::restore_graph_node).
     /// Clones only the affected items (typically 1 node + a few edges)
     /// instead of the entire index.
-    pub(crate) fn remove_graph_node(&mut self, name: &str) -> RemovedGraphNode {
+    pub(super) fn remove_graph_node(&mut self, name: &str) -> RemovedGraphNode {
         let nodes: Vec<NodeEntry> = self
             .graph_index
             .nodes
@@ -151,14 +157,14 @@ impl ProjectState {
     }
 
     /// Restore a previously removed node and its edges.
-    pub(crate) fn restore_graph_node(&mut self, removed: RemovedGraphNode) {
+    pub(super) fn restore_graph_node(&mut self, removed: RemovedGraphNode) {
         self.graph_index.nodes.extend(removed.nodes);
         self.graph_index.edges.extend(removed.edges);
     }
 
     /// Update the hash of a named node. Returns the previous hash
     /// so the caller can restore it on commit failure.
-    pub(crate) fn update_node_hash(&mut self, name: &str, new_hash: String) -> Option<String> {
+    pub(super) fn update_node_hash(&mut self, name: &str, new_hash: String) -> Option<String> {
         self.graph_index
             .nodes
             .iter_mut()
@@ -175,7 +181,7 @@ impl ProjectState {
 /// on rollback is O(K) where K is the number of appended items —
 /// compared to O(N) for a full `GraphIndex::clone`.
 #[must_use = "discard explicitly with drop() if rollback is not needed"]
-pub(crate) struct GraphCheckpoint {
+pub(super) struct GraphCheckpoint {
     nodes_len: usize,
     edges_len: usize,
 }
@@ -186,7 +192,7 @@ pub(crate) struct GraphCheckpoint {
 /// commit fails. Clones only the affected items (typically 1 node +
 /// 2–5 edges), not the entire graph index.
 #[must_use = "discard explicitly with drop() if rollback is not needed"]
-pub(crate) struct RemovedGraphNode {
+pub(super) struct RemovedGraphNode {
     nodes: Vec<NodeEntry>,
     edges: Vec<EdgeEntry>,
 }

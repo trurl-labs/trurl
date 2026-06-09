@@ -33,6 +33,9 @@ chrono = { version = "0.4", features = ["serde"] }
 # Content hashing (pure Rust, no C/OpenSSL dependency)
 blake3 = "1"
 
+# Parallel file I/O for load_state
+rayon = "1"
+
 # File locking (cross-platform flock)
 fs2 = "0.4"
 

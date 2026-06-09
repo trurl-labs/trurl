@@ -28,7 +28,7 @@ pub fn rename_component(cwd: &Path, old: &str, new: &str) -> Result<()> {
 pub fn remove_component(cwd: &Path, name: &str) -> Result<()> {
     let (store, lock, mut state) = open_store_mut(cwd)?;
 
-    let cascade = state.graph.check_component_cascade(name);
+    let cascade = state.graph().check_component_cascade(name);
     if cascade.is_blocked() {
         return Err(Error::CascadeBlocked(cascade.blocker_summary()));
     }

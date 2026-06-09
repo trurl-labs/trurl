@@ -360,8 +360,8 @@ mod tests {
 
         // The cached graph must reflect the new decision — otherwise the
         // second call would validate against a stale graph.
-        assert!(state.graph.decision(&stem1).is_some());
-        assert_eq!(state.graph.decisions_for("auth").len(), 1);
+        assert!(state.graph().decision(&stem1).is_some());
+        assert_eq!(state.graph().decisions_for("auth").len(), 1);
 
         // Record second decision in the same session.
         let stem2 = record_decision(
@@ -374,8 +374,8 @@ mod tests {
         )
         .unwrap();
 
-        assert!(state.graph.decision(&stem2).is_some());
-        assert_eq!(state.graph.decisions_for("auth").len(), 2);
+        assert!(state.graph().decision(&stem2).is_some());
+        assert_eq!(state.graph().decisions_for("auth").len(), 2);
 
         // Both decisions and their BelongsTo edges must be present.
         let edge_count = state
