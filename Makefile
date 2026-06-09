@@ -59,14 +59,27 @@ test:
 
 # ── Audit ─────────────────────────────────────────────────────────────────────
 # Rust:       requires `cargo install cargo-deny`
-# TypeScript: npm audit (configured via .npmrc audit-level=high)
+# TypeScript: cve-lite-cli + npm audit + lockfile-lint
 
 audit: audit-js
 	cargo deny check
 
 audit-js: $(NODE_STAMP)
-	@echo "── TypeScript dependency audit ──────────────────────────────────────"
-	cd $(FRONTEND_DIR) && npm audit
+	@echo "── npm dependency CVE scan ──────────────────────────────────────────"
+	cd $(FRONTEND_DIR) && npx cve-lite-cli . --verbose --fail-on high
+	@echo ""
+	@echo "── npm audit (advisory check) ──────────────────────────────────────"
+	cd $(FRONTEND_DIR) && npm audit --omit=dev || true
+	@echo ""
+	@echo "── lockfile integrity ──────────────────────────────────────────────"
+	cd $(FRONTEND_DIR) && npx lockfile-lint \
+		--path package-lock.json \
+		--type npm \
+		--allowed-hosts npm \
+		--validate-https \
+		--validate-package-names
+	@echo ""
+	@echo "  ✓ Supply chain checks passed"
 
 # ── CI gate (run before pushing) ──────────────────────────────────────────────
 

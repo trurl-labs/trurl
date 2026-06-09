@@ -61,3 +61,18 @@ jobs:
       - run: npm run fmt:check
       - run: npm run typecheck
       - run: npm test
+
+      - name: CVE scan (cve-lite-cli)
+        run: npx cve-lite-cli . --verbose --fail-on high
+
+      - name: Advisory check (npm audit)
+        run: npm audit --omit=dev || true
+
+      - name: Lockfile integrity
+        run: |
+          npx lockfile-lint \
+            --path package-lock.json \
+            --type npm \
+            --allowed-hosts npm \
+            --validate-https \
+            --validate-package-names
