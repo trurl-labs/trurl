@@ -1,5 +1,7 @@
+mod cascade;
 pub mod graph;
 pub(crate) mod limits;
+mod query;
 pub mod schema;
 mod validate;
 pub(crate) mod watcher;
@@ -614,8 +616,8 @@ fn compare_versions(a: &str, b: &str) -> Ordering {
 pub(crate) mod testing {
     use super::*;
     use crate::store::schema::{
-        Component, ComponentFile, Decision, DecisionFile, GraphIndex, NodeEntry, NodeKind, Project,
-        ProjectFile,
+        Component, ComponentFile, Decision, DecisionFile, EdgeEntry, EdgeKind, GraphIndex,
+        NodeEntry, NodeKind, Project, ProjectFile,
     };
     use chrono::{TimeZone, Utc};
 
@@ -891,6 +893,161 @@ pub(crate) mod testing {
         drop(lock);
         let state = store.load_state().unwrap();
         (store, state)
+    }
+
+    // ── Shared graph fixtures ────────────────────────────────────────────
+
+    pub fn ts() -> chrono::DateTime<chrono::Utc> {
+        chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2025, 6, 1, 10, 0, 0).unwrap()
+    }
+
+    pub fn arc_map<T>(map: BTreeMap<String, T>) -> BTreeMap<String, Arc<T>> {
+        map.into_iter().map(|(k, v)| (k, Arc::new(v))).collect()
+    }
+
+    /// Realistic graph fixture shared by graph, query, and validate tests.
+    ///
+    ///   Components: project (virtual), auth, database, rate-limiter
+    ///   Decisions: use-jwt (auth), error-strategy (project), db-pool (database)
+    ///   Edges: auth→database (ConnectsTo), rate-limiter→database (ConnectsTo),
+    ///          BelongsTo for all decisions
+    pub fn test_graph() -> graph::InMemoryGraph {
+        let index = GraphIndex {
+            version: 1,
+            rebuilt: ts(),
+            nodes: vec![
+                NodeEntry {
+                    name: "project".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "p".into(),
+                },
+                NodeEntry {
+                    name: "auth".into(),
+                    kind: NodeKind::Component,
+                    tags: vec!["security".into()],
+                    hash: "a".into(),
+                },
+                NodeEntry {
+                    name: "database".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "d".into(),
+                },
+                NodeEntry {
+                    name: "rate-limiter".into(),
+                    kind: NodeKind::Component,
+                    tags: vec![],
+                    hash: "r".into(),
+                },
+                NodeEntry {
+                    name: "use-jwt".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec!["auth".into()],
+                    hash: "j".into(),
+                },
+                NodeEntry {
+                    name: "error-strategy".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: "e".into(),
+                },
+                NodeEntry {
+                    name: "db-pool".into(),
+                    kind: NodeKind::Decision,
+                    tags: vec![],
+                    hash: "b".into(),
+                },
+            ],
+            edges: vec![
+                EdgeEntry {
+                    from: "auth".into(),
+                    to: "database".into(),
+                    kind: EdgeKind::ConnectsTo,
+                },
+                EdgeEntry {
+                    from: "rate-limiter".into(),
+                    to: "database".into(),
+                    kind: EdgeKind::ConnectsTo,
+                },
+                EdgeEntry {
+                    from: "use-jwt".into(),
+                    to: "auth".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+                EdgeEntry {
+                    from: "error-strategy".into(),
+                    to: "project".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+                EdgeEntry {
+                    from: "db-pool".into(),
+                    to: "database".into(),
+                    kind: EdgeKind::BelongsTo,
+                },
+            ],
+        };
+
+        let mut components = BTreeMap::new();
+        for name in ["auth", "database", "rate-limiter"] {
+            components.insert(
+                name.into(),
+                ComponentFile {
+                    component: Component {
+                        name: name.into(),
+                        description: format!("The {name} component"),
+                    },
+                },
+            );
+        }
+
+        let mut decisions = BTreeMap::new();
+        decisions.insert(
+            "use-jwt".into(),
+            DecisionFile {
+                decision: Decision {
+                    component: "auth".into(),
+                    choice: "JWT with DPoP".into(),
+                    reason: "Stateless".into(),
+                    alternatives: vec![],
+                    tags: vec![],
+                    created: ts(),
+                },
+            },
+        );
+        decisions.insert(
+            "error-strategy".into(),
+            DecisionFile {
+                decision: Decision {
+                    component: "project".into(),
+                    choice: "Result<T, AppError>".into(),
+                    reason: "Consistent errors".into(),
+                    alternatives: vec![],
+                    tags: vec![],
+                    created: ts(),
+                },
+            },
+        );
+        decisions.insert(
+            "db-pool".into(),
+            DecisionFile {
+                decision: Decision {
+                    component: "database".into(),
+                    choice: "Shared connection pool".into(),
+                    reason: "Avoid per-request overhead".into(),
+                    alternatives: vec![],
+                    tags: vec![],
+                    created: ts(),
+                },
+            },
+        );
+
+        graph::InMemoryGraph::build(
+            &index,
+            &arc_map(components),
+            &arc_map(decisions),
+            &BTreeMap::new(),
+        )
     }
 }
 

@@ -21,6 +21,7 @@
 //! 4. **Transport-agnostic.** Prompt generation lives here, not in `mcp/`
 //!    or `session/`.
 
+mod action;
 pub mod advance;
 pub mod concerns;
 pub mod steps;
