@@ -30,7 +30,7 @@ pub use schema::{
 pub use state::{
     ProjectState, has_control_chars, is_reserved_node_name, is_valid_kebab_case, slugify,
 };
-pub use write::RecordDecisionParams;
+pub use write::{AmendDecisionParams, RecordDecisionParams};
 
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 

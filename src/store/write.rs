@@ -9,8 +9,13 @@ use serde::de::DeserializeOwned;
 use crate::{Error, Result};
 
 use super::graph::Severity;
-use super::schema::{Decision, DecisionFile, EdgeEntry, EdgeKind, GraphIndex, NodeEntry, NodeKind};
-use super::state::{ProjectState, slugify, unique_decision_stem};
+use super::schema::{
+    Component, ComponentFile, Decision, DecisionFile, EdgeEntry, EdgeKind, GraphIndex, NodeEntry,
+    NodeKind,
+};
+use super::state::{
+    ProjectState, is_reserved_node_name, is_valid_kebab_case, slugify, unique_decision_stem,
+};
 use super::{Store, StoreLock};
 
 // ── PendingWrite ─────────────────────────────────────────────────────────────
@@ -50,6 +55,20 @@ pub struct RecordDecisionParams<'a> {
     pub depends_on: &'a [String],
     pub constrains: &'a [String],
     pub tags: &'a [String],
+}
+
+// ── AmendDecisionParams ─────────────────────────────────────────────
+
+/// Parameters for [`Store::amend_decision`].
+///
+/// All fields are optional; the method requires at least one `Some`.
+/// Transport-specific quality checks (field length limits, reason
+/// minimums) belong in the adapter — this struct carries only the
+/// values to write.
+pub struct AmendDecisionParams<'a> {
+    pub choice: Option<&'a str>,
+    pub reason: Option<&'a str>,
+    pub tags: Option<&'a [String]>,
 }
 
 impl Store {
@@ -404,6 +423,310 @@ impl Store {
         }
 
         Ok(stem)
+    }
+
+    // ── Add component (shared write path) ───────────────────────────────
+
+    /// Create a new component with full validation and atomic commit.
+    ///
+    /// Single write path for CLI `add component`, MCP `add_component`,
+    /// and map `POST /api/component`. Validates name format, uniqueness,
+    /// and cross-type collisions, then commits atomically.
+    ///
+    /// On success, `state` is updated in-place (including graph cache).
+    /// On failure, `state` is rolled back.
+    pub fn add_component(
+        &self,
+        lock: &StoreLock,
+        state: &mut ProjectState,
+        name: &str,
+        description: &str,
+    ) -> Result<()> {
+        if !is_valid_kebab_case(name) {
+            return Err(Error::InvalidName(name.into()));
+        }
+        if is_reserved_node_name(name) {
+            return Err(Error::ReservedName(name.into()));
+        }
+        if state.components.contains_key(name) {
+            return Err(Error::ComponentExists(name.into()));
+        }
+        if state.is_node_name_taken(name) {
+            return Err(Error::Validation(format!(
+                "name `{name}` is already used by an existing decision or pattern"
+            )));
+        }
+
+        let comp = ComponentFile {
+            component: Component {
+                name: name.into(),
+                description: description.into(),
+            },
+        };
+
+        let write = self.prepare_write(&self.component_path(name), &comp)?;
+        let hash = write.content_hash();
+
+        let checkpoint = state.graph_checkpoint();
+        state.graph_index.nodes.push(NodeEntry {
+            name: name.into(),
+            kind: NodeKind::Component,
+            tags: vec![],
+            hash,
+        });
+        state.components.insert(name.into(), comp);
+
+        if let Err(e) = self.commit_with_graph(lock, vec![write], vec![], state) {
+            state.rollback_graph(checkpoint);
+            state.components.remove(name);
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
+    // ── Remove component (shared write path) ────────────────────────────
+
+    /// Remove a component from disk and the graph index.
+    ///
+    /// **Callers must** run cascade pre-flight (`check_component_cascade`)
+    /// and decide how to handle blockers before calling. This method does
+    /// not check cascade rules — it trusts the caller.
+    ///
+    /// On failure, `state` is rolled back.
+    pub fn remove_component(
+        &self,
+        lock: &StoreLock,
+        state: &mut ProjectState,
+        name: &str,
+    ) -> Result<()> {
+        if !state.components.contains_key(name) {
+            return Err(Error::ComponentNotFound(name.into()));
+        }
+
+        let comp_snapshot = state.components.remove(name);
+        let removed = state.remove_graph_node(name);
+        let removes = vec![self.component_path(name)];
+
+        if let Err(e) = self.commit_with_graph(lock, vec![], removes, state) {
+            if let Some(c) = comp_snapshot {
+                state.components.insert(name.into(), c);
+            }
+            state.restore_graph_node(removed);
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
+    // ── Add connection (shared write path) ──────────────────────────────
+
+    /// Connect two components with full validation and atomic commit.
+    ///
+    /// On success, `state` is updated in-place. On failure, rolled back.
+    pub fn add_connection(
+        &self,
+        lock: &StoreLock,
+        state: &mut ProjectState,
+        from: &str,
+        to: &str,
+    ) -> Result<()> {
+        if !state.components.contains_key(from) {
+            return Err(Error::ComponentNotFound(from.into()));
+        }
+        if !state.components.contains_key(to) {
+            return Err(Error::ComponentNotFound(to.into()));
+        }
+        if from == to {
+            return Err(Error::SelfConnection(from.into()));
+        }
+
+        let duplicate = state
+            .graph_index
+            .edges
+            .iter()
+            .any(|e| e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo);
+        if duplicate {
+            return Err(Error::DuplicateConnection {
+                from: from.into(),
+                to: to.into(),
+            });
+        }
+
+        let checkpoint = state.graph_checkpoint();
+        state.graph_index.edges.push(EdgeEntry {
+            from: from.into(),
+            to: to.into(),
+            kind: EdgeKind::ConnectsTo,
+        });
+
+        if let Err(e) = self.commit_with_graph(lock, vec![], vec![], state) {
+            state.rollback_graph(checkpoint);
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
+    // ── Remove connection (shared write path) ───────────────────────────
+
+    /// Remove a connection between two components.
+    ///
+    /// On failure, `state` is rolled back.
+    pub fn remove_connection(
+        &self,
+        lock: &StoreLock,
+        state: &mut ProjectState,
+        from: &str,
+        to: &str,
+    ) -> Result<()> {
+        let existed = state
+            .graph_index
+            .edges
+            .iter()
+            .any(|e| e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo);
+        if !existed {
+            return Err(Error::ConnectionNotFound {
+                from: from.into(),
+                to: to.into(),
+            });
+        }
+
+        let removed_edge = EdgeEntry {
+            from: from.into(),
+            to: to.into(),
+            kind: EdgeKind::ConnectsTo,
+        };
+
+        state
+            .graph_index
+            .edges
+            .retain(|e| !(e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo));
+
+        if let Err(e) = self.commit_with_graph(lock, vec![], vec![], state) {
+            state.graph_index.edges.push(removed_edge);
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
+    // ── Remove decision (shared write path) ─────────────────────────────
+
+    /// Remove a decision from disk and the graph index.
+    ///
+    /// **Callers must** run cascade pre-flight (`check_decision_cascade`)
+    /// and decide how to handle blockers before calling.
+    ///
+    /// On failure, `state` is rolled back.
+    pub fn remove_decision(
+        &self,
+        lock: &StoreLock,
+        state: &mut ProjectState,
+        name: &str,
+    ) -> Result<()> {
+        if !state.decisions.contains_key(name) {
+            return Err(Error::DecisionNotFound(name.into()));
+        }
+
+        let dec_snapshot = state.decisions.remove(name);
+        let removed = state.remove_graph_node(name);
+        let removes = vec![self.decision_path(name)];
+
+        if let Err(e) = self.commit_with_graph(lock, vec![], removes, state) {
+            if let Some(d) = dec_snapshot {
+                state.decisions.insert(name.into(), d);
+            }
+            state.restore_graph_node(removed);
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
+    // ── Amend decision (shared write path) ────────────────────────────
+
+    /// Amend an existing decision in place: update choice, reason, and/or
+    /// tags without changing the `created` timestamp.
+    ///
+    /// Single write path for MCP `update_decision(mode=amend)` and map
+    /// `PUT /api/decision/:name`. Handles state mutation, graph‐index tag
+    /// sync, and rollback on commit failure.
+    ///
+    /// **Callers** validate transport‐specific quality constraints (field
+    /// lengths, reason minimums) before calling. This method enforces
+    /// baseline correctness only (non‐empty fields, at least one change).
+    pub fn amend_decision(
+        &self,
+        lock: &StoreLock,
+        state: &mut ProjectState,
+        name: &str,
+        params: AmendDecisionParams<'_>,
+    ) -> Result<()> {
+        if params.choice.is_none() && params.reason.is_none() && params.tags.is_none() {
+            return Err(Error::Validation(
+                "at least one of choice, reason, or tags is required".into(),
+            ));
+        }
+        if let Some(c) = params.choice
+            && c.trim().is_empty()
+        {
+            return Err(Error::Validation("choice must not be empty".into()));
+        }
+        if let Some(r) = params.reason
+            && r.trim().is_empty()
+        {
+            return Err(Error::Validation("reason must not be empty".into()));
+        }
+
+        let old_dec = state
+            .decisions
+            .get(name)
+            .ok_or_else(|| Error::DecisionNotFound(name.into()))?
+            .clone();
+
+        let mut amended = old_dec.clone();
+        if let Some(c) = params.choice {
+            amended.decision.choice = c.into();
+        }
+        if let Some(r) = params.reason {
+            amended.decision.reason = r.into();
+        }
+        if let Some(t) = params.tags {
+            amended.decision.tags = t.to_vec();
+        }
+
+        let write = self.prepare_write(&self.decision_path(name), &amended)?;
+        let hash = write.content_hash();
+
+        // Mutate state. Save only the affected fields for rollback.
+        state.decisions.insert(name.into(), amended);
+        let old_hash = state.update_node_hash(name, hash);
+        let old_tags = if let Some(t) = params.tags {
+            state
+                .graph_index
+                .nodes
+                .iter_mut()
+                .find(|n| n.name == name)
+                .map(|n| std::mem::replace(&mut n.tags, t.to_vec()))
+        } else {
+            None
+        };
+
+        if let Err(e) = self.commit_with_graph(lock, vec![write], vec![], state) {
+            state.decisions.insert(name.into(), old_dec);
+            if let Some(h) = old_hash {
+                state.update_node_hash(name, h);
+            }
+            if let Some(t) = old_tags
+                && let Some(n) = state.graph_index.nodes.iter_mut().find(|n| n.name == name)
+            {
+                n.tags = t;
+            }
+            return Err(e);
+        }
+
+        Ok(())
     }
 
     // ── Crash recovery ───────────────────────────────────────────────────

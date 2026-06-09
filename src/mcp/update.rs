@@ -48,21 +48,11 @@ pub(crate) fn remove_decision(
         }));
     }
 
-    // Execute removal.
+    // Execute removal via shared write path.
     let lock = store.lock().map_err(|e| e.to_string())?;
-    let decision_snapshot = state.decisions.remove(name);
-    let removed = state.remove_graph_node(name);
-
-    let removes = vec![store.decision_path(name)];
-
-    if let Err(e) = store.commit_with_graph(&lock, vec![], removes, state) {
-        // Rollback.
-        if let Some(dec) = decision_snapshot {
-            state.decisions.insert(name.into(), dec);
-        }
-        state.restore_graph_node(removed);
-        return Err(e.to_string());
-    }
+    store
+        .remove_decision(&lock, state, name)
+        .map_err(|e| e.to_string())?;
 
     Ok(serde_json::json!({
         "removed": true,
@@ -139,41 +129,18 @@ fn amend_decision(
     }
 
     let lock = store.lock().map_err(|e| e.to_string())?;
-
-    // Build the amended decision as a separate value. State is not mutated
-    // until prepare_write succeeds, so a serialization failure leaves the
-    // in-memory graph clean.
-    let old_dec = state
-        .decisions
-        .get(name)
-        .ok_or_else(|| format!("decision `{name}` does not exist"))?
-        .clone();
-
-    let mut amended = old_dec.clone();
-    if let Some(c) = new_choice {
-        amended.decision.choice = c.into();
-    }
-    if let Some(r) = new_reason {
-        amended.decision.reason = r.into();
-    }
-
-    let write = store
-        .prepare_write(&store.decision_path(name), &amended)
+    store
+        .amend_decision(
+            &lock,
+            state,
+            name,
+            store::AmendDecisionParams {
+                choice: new_choice,
+                reason: new_reason,
+                tags: None,
+            },
+        )
         .map_err(|e| e.to_string())?;
-    let hash = write.content_hash();
-
-    // Mutate state. Save only the affected hash for rollback.
-    state.decisions.insert(name.into(), amended);
-    let old_hash = state.update_node_hash(name, hash);
-
-    if let Err(e) = store.commit_with_graph(&lock, vec![write], vec![], state) {
-        // Rollback: restore decision content and node hash.
-        state.decisions.insert(name.into(), old_dec);
-        if let Some(h) = old_hash {
-            state.update_node_hash(name, h);
-        }
-        return Err(e.to_string());
-    }
 
     // Collect affected patterns and decisions.
     let (affected_patterns, affected_decisions) = collect_affected(&state.graph, name);

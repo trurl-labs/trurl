@@ -241,65 +241,15 @@ fn write_component(state: Arc<MapState>, body: CreateComponent) -> ApiResult {
     check_field_len("name", &body.name)?;
     check_field_len("description", &body.description)?;
 
-    if !store::is_valid_kebab_case(&body.name) {
-        return Err(api_err(StatusCode::BAD_REQUEST, "invalid kebab-case name"));
-    }
-    if store::is_reserved_node_name(&body.name) {
-        return Err(api_err(StatusCode::BAD_REQUEST, "reserved name"));
-    }
-
     let mut ps = state.write_project_state();
-
-    if ps.components.contains_key(&body.name) {
-        return Err(api_err(StatusCode::CONFLICT, "component already exists"));
-    }
-    if ps.decisions.contains_key(&body.name) || ps.patterns.contains_key(&body.name) {
-        return Err(api_err(
-            StatusCode::CONFLICT,
-            "name conflicts with an existing decision or pattern",
-        ));
-    }
-
-    let comp = crate::store::schema::ComponentFile {
-        component: crate::store::schema::Component {
-            name: body.name.clone(),
-            description: body.description,
-        },
-    };
-
-    let write = state
+    let lock = state
         .store
-        .prepare_write(&state.store.component_path(&body.name), &comp)
+        .lock()
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let hash = write.content_hash();
-
-    // Checkpoint for rollback — O(1) since all mutations are appends.
-    let checkpoint = ps.graph_checkpoint();
-
-    ps.graph_index.nodes.push(crate::store::schema::NodeEntry {
-        name: body.name.clone(),
-        kind: crate::store::schema::NodeKind::Component,
-        tags: vec![],
-        hash,
-    });
-    ps.components.insert(body.name.clone(), comp);
-
-    let lock = match state.store.lock() {
-        Ok(lock) => lock,
-        Err(e) => {
-            ps.rollback_graph(checkpoint);
-            ps.components.remove(&body.name);
-            return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-        }
-    };
-    if let Err(e) = state
+    state
         .store
-        .commit_with_graph(&lock, vec![write], vec![], &mut ps)
-    {
-        ps.rollback_graph(checkpoint);
-        ps.components.remove(&body.name);
-        return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-    }
+        .add_component(&lock, &mut ps, &body.name, &body.description)
+        .map_err(|e| api_err(StatusCode::CONFLICT, e.to_string()))?;
 
     let name = body.name;
     ws::broadcast(
@@ -333,47 +283,14 @@ fn write_connection(state: Arc<MapState>, body: CreateConnection) -> ApiResult {
     check_field_len("to", &body.to)?;
 
     let mut ps = state.write_project_state();
-
-    if !ps.components.contains_key(&body.from) {
-        return Err(api_err(StatusCode::NOT_FOUND, "source component not found"));
-    }
-    if !ps.components.contains_key(&body.to) {
-        return Err(api_err(StatusCode::NOT_FOUND, "target component not found"));
-    }
-    if body.from == body.to {
-        return Err(api_err(StatusCode::BAD_REQUEST, "self-connection"));
-    }
-    let dup = ps
-        .graph_index
-        .edges
-        .iter()
-        .any(|e| e.from == body.from && e.to == body.to && e.kind == EdgeKind::ConnectsTo);
-    if dup {
-        return Err(api_err(StatusCode::CONFLICT, "connection already exists"));
-    }
-
-    let checkpoint = ps.graph_checkpoint();
-
-    ps.graph_index.edges.push(crate::store::schema::EdgeEntry {
-        from: body.from.clone(),
-        to: body.to.clone(),
-        kind: EdgeKind::ConnectsTo,
-    });
-
-    let lock = match state.store.lock() {
-        Ok(lock) => lock,
-        Err(e) => {
-            ps.rollback_graph(checkpoint);
-            return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-        }
-    };
-    if let Err(e) = state
+    let lock = state
         .store
-        .commit_with_graph(&lock, vec![], vec![], &mut ps)
-    {
-        ps.rollback_graph(checkpoint);
-        return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-    }
+        .lock()
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    state
+        .store
+        .add_connection(&lock, &mut ps, &body.from, &body.to)
+        .map_err(|e| api_err(StatusCode::CONFLICT, e.to_string()))?;
 
     ws::broadcast(
         &state.ws_tx,
@@ -411,15 +328,9 @@ fn amend_decision(state: Arc<MapState>, name: String, body: AmendDecision) -> Ap
     }
     if let Some(ref c) = body.choice {
         check_field_len("choice", c)?;
-        if c.trim().is_empty() {
-            return Err(api_err(StatusCode::BAD_REQUEST, "choice must not be empty"));
-        }
     }
     if let Some(ref r) = body.reason {
         check_field_len("reason", r)?;
-        if r.trim().is_empty() {
-            return Err(api_err(StatusCode::BAD_REQUEST, "reason must not be empty"));
-        }
     }
     if let Some(ref t) = body.tags {
         if t.len() > MAX_TAGS {
@@ -433,77 +344,21 @@ fn amend_decision(state: Arc<MapState>, name: String, body: AmendDecision) -> Ap
         }
     }
 
+    let params = store::AmendDecisionParams {
+        choice: body.choice.as_deref(),
+        reason: body.reason.as_deref(),
+        tags: body.tags.as_deref(),
+    };
+
     let mut ps = state.write_project_state();
-
-    // Build the amended decision as a separate value. State is not mutated
-    // until prepare_write succeeds, so a serialization failure leaves the
-    // in-memory graph clean.
-    let old_dec = ps
-        .decisions
-        .get(&name)
-        .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "decision not found"))?
-        .clone();
-
-    let mut amended = old_dec.clone();
-    if let Some(ref c) = body.choice {
-        amended.decision.choice.clone_from(c);
-    }
-    if let Some(ref r) = body.reason {
-        amended.decision.reason.clone_from(r);
-    }
-    if let Some(ref t) = body.tags {
-        amended.decision.tags.clone_from(t);
-    }
-
-    let write = state
+    let lock = state
         .store
-        .prepare_write(&state.store.decision_path(&name), &amended)
+        .lock()
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let hash = write.content_hash();
-
-    // Mutate state. Save only the affected node fields for rollback.
-    ps.decisions.insert(name.clone(), amended);
-    let old_hash = ps.update_node_hash(&name, hash);
-    let old_tags = if let Some(ref t) = body.tags {
-        ps.graph_index
-            .nodes
-            .iter_mut()
-            .find(|n| n.name == name)
-            .map(|n| std::mem::replace(&mut n.tags, t.clone()))
-    } else {
-        None
-    };
-
-    let lock = match state.store.lock() {
-        Ok(lock) => lock,
-        Err(e) => {
-            ps.decisions.insert(name.clone(), old_dec.clone());
-            if let Some(h) = old_hash.clone() {
-                ps.update_node_hash(&name, h);
-            }
-            if let Some(t) = old_tags.clone()
-                && let Some(n) = ps.graph_index.nodes.iter_mut().find(|n| n.name == name)
-            {
-                n.tags = t;
-            }
-            return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-        }
-    };
-    if let Err(e) = state
+    state
         .store
-        .commit_with_graph(&lock, vec![write], vec![], &mut ps)
-    {
-        if let Some(h) = old_hash {
-            ps.update_node_hash(&name, h);
-        }
-        if let Some(t) = old_tags
-            && let Some(n) = ps.graph_index.nodes.iter_mut().find(|n| n.name == name)
-        {
-            n.tags = t;
-        }
-        ps.decisions.insert(name, old_dec);
-        return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-    }
+        .amend_decision(&lock, &mut ps, &name, params)
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     ws::broadcast(
         &state.ws_tx,
@@ -545,30 +400,14 @@ fn remove_component(state: Arc<MapState>, name: String) -> ApiResult {
         return Err(api_err(StatusCode::CONFLICT, cascade.blocker_summary()));
     }
 
-    let comp_snapshot = ps.components.remove(&name);
-    let removed = ps.remove_graph_node(&name);
-
-    let lock = match state.store.lock() {
-        Ok(lock) => lock,
-        Err(e) => {
-            if let Some(comp) = comp_snapshot {
-                ps.components.insert(name.clone(), comp);
-            }
-            ps.restore_graph_node(removed);
-            return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-        }
-    };
-    let removes = vec![state.store.component_path(&name)];
-    if let Err(e) = state
+    let lock = state
         .store
-        .commit_with_graph(&lock, vec![], removes, &mut ps)
-    {
-        if let Some(comp) = comp_snapshot {
-            ps.components.insert(name, comp);
-        }
-        ps.restore_graph_node(removed);
-        return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-    }
+        .lock()
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    state
+        .store
+        .remove_component(&lock, &mut ps, &name)
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     ws::broadcast(&state.ws_tx, &[WsEvent::NodeRemoved { name: name.clone() }]);
     Ok(Json(json!({
@@ -602,30 +441,14 @@ fn remove_decision(state: Arc<MapState>, name: String) -> ApiResult {
         return Err(api_err(StatusCode::CONFLICT, cascade.blocker_summary()));
     }
 
-    let dec_snapshot = ps.decisions.remove(&name);
-    let removed = ps.remove_graph_node(&name);
-
-    let lock = match state.store.lock() {
-        Ok(lock) => lock,
-        Err(e) => {
-            if let Some(dec) = dec_snapshot {
-                ps.decisions.insert(name.clone(), dec);
-            }
-            ps.restore_graph_node(removed);
-            return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-        }
-    };
-    let removes = vec![state.store.decision_path(&name)];
-    if let Err(e) = state
+    let lock = state
         .store
-        .commit_with_graph(&lock, vec![], removes, &mut ps)
-    {
-        if let Some(dec) = dec_snapshot {
-            ps.decisions.insert(name, dec);
-        }
-        ps.restore_graph_node(removed);
-        return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-    }
+        .lock()
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    state
+        .store
+        .remove_decision(&lock, &mut ps, &name)
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     ws::broadcast(&state.ws_tx, &[WsEvent::NodeRemoved { name: name.clone() }]);
     Ok(Json(json!({
@@ -649,41 +472,14 @@ pub(crate) async fn delete_connection(
 
 fn remove_connection(state: Arc<MapState>, from: String, to: String) -> ApiResult {
     let mut ps = state.write_project_state();
-
-    let existed = ps
-        .graph_index
-        .edges
-        .iter()
-        .any(|e| e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo);
-    if !existed {
-        return Err(api_err(StatusCode::NOT_FOUND, "connection not found"));
-    }
-
-    // Save the edge being removed for rollback — one EdgeEntry, not the full index.
-    let removed_edge = crate::store::schema::EdgeEntry {
-        from: from.clone(),
-        to: to.clone(),
-        kind: EdgeKind::ConnectsTo,
-    };
-
-    ps.graph_index
-        .edges
-        .retain(|e| !(e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo));
-
-    let lock = match state.store.lock() {
-        Ok(lock) => lock,
-        Err(e) => {
-            ps.graph_index.edges.push(removed_edge);
-            return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-        }
-    };
-    if let Err(e) = state
+    let lock = state
         .store
-        .commit_with_graph(&lock, vec![], vec![], &mut ps)
-    {
-        ps.graph_index.edges.push(removed_edge);
-        return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
-    }
+        .lock()
+        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    state
+        .store
+        .remove_connection(&lock, &mut ps, &from, &to)
+        .map_err(|e| api_err(StatusCode::NOT_FOUND, e.to_string()))?;
 
     ws::broadcast(
         &state.ws_tx,
