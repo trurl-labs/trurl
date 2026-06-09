@@ -29,6 +29,7 @@ Before implementing any task:
 | `learn` | Understanding existing architecture |
 | `review` | Challenging decisions for drift |
 | `harden` | Filling coverage gaps |
+| `bootstrap` | Autonomous extraction from existing source code |
 
 ### Comprehension Gates
 

@@ -77,6 +77,9 @@ trurlic decide auth --choice "JWT with DPoP binding" \
 # Or run a Socratic design conversation — the AI asks, you think
 trurlic design auth
 
+# Or bootstrap from existing source code — the AI reads, records, done
+trurlic bootstrap
+
 # Start the MCP server for AI coding agents
 trurlic serve
 ```
@@ -90,6 +93,22 @@ trurlic serve
 **A visual map.** `trurlic map` opens an interactive graph in the browser. Components, connections, decisions, patterns — explorable, editable, live-synced with the filesystem.
 
 **A CLI.** `trurlic design <component>` runs a guided design conversation. `trurlic decide` records quick decisions. Everything local, everything under 100ms.
+
+## Bootstrap
+
+For existing codebases, `trurlic bootstrap` populates the decision graph autonomously. Your coding agent reads the source code and records components, decisions, and patterns — no interactive dialogue needed.
+
+```bash
+trurlic init
+trurlic bootstrap     # shows status and agent instructions
+trurlic serve         # start MCP server
+# then in your coding agent:
+#   advance(component="project", task_type="bootstrap")
+#   follow each step until ready: true
+trurlic map           # review the result
+```
+
+Bootstrap a single component: `trurlic bootstrap auth`.
 
 ## MCP setup
 
@@ -167,6 +186,7 @@ trurlic design <component>                    Socratic design conversation
       [--continue] [--revisit] [-t <task>]
       [-p anthropic|openai|openrouter]
       [-m <model>]
+trurlic bootstrap [<component>]               Bootstrap status and agent instructions
 trurlic serve                                 Start MCP server (stdio)
 trurlic map [--port N] [--no-open] [--detach] Interactive graph in browser
 trurlic status                                Show counts and health

@@ -112,6 +112,13 @@ pub enum Command {
         #[arg(long)]
         rebuild: bool,
     },
+
+    /// Show bootstrap progress and agent instructions for autonomous
+    /// architecture extraction from an existing codebase.
+    Bootstrap {
+        /// Bootstrap a single component instead of the full project.
+        component: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -228,5 +235,9 @@ pub fn run(cli: Cli) -> Result<()> {
         } => commands::map(&cwd, port, no_open, detach),
         Command::Status => commands::status(&cwd),
         Command::Check { rebuild } => commands::check(&cwd, rebuild),
+        Command::Bootstrap { component } => match component {
+            Some(ref c) => commands::bootstrap_component(&cwd, c),
+            None => commands::bootstrap(&cwd),
+        },
     }
 }

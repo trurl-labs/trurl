@@ -1,3 +1,4 @@
+mod bootstrap;
 mod component;
 mod decision;
 mod design;
@@ -6,6 +7,7 @@ mod map;
 mod query;
 mod serve;
 
+pub use bootstrap::{bootstrap, bootstrap_component};
 pub use component::{
     add_component, add_connection, remove_component, remove_connection, rename_component,
 };
