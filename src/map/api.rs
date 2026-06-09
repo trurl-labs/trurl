@@ -15,6 +15,9 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::store::limits::{
+    MAX_ARRAY_ITEMS, MAX_CHOICE_BYTES, MAX_TEXT_FIELD_BYTES, MIN_REASON_BYTES,
+};
 use crate::store::schema::{EdgeKind, NodeKind};
 use crate::store::{self};
 
@@ -23,14 +26,6 @@ use super::layout::Position;
 use super::{MapState, ws};
 
 // ── Request bodies ─────────────────────────────────────────────────────────
-
-/// Maximum byte length for any single text field from the map API.
-/// Matches the MCP server's `MAX_TEXT_ARG_BYTES` bound — same store,
-/// same limits, regardless of entry point.
-const MAX_FIELD_BYTES: usize = 50_000;
-
-/// Maximum number of tags on a single decision.
-const MAX_TAGS: usize = 100;
 
 /// Maximum number of layout positions in a single PUT.
 const MAX_LAYOUT_POSITIONS: usize = 10_000;
@@ -64,10 +59,10 @@ pub(crate) struct PutLayout {
 // ── Input validation ──────────────────────────────────────────────────────
 
 fn check_field_len(field: &str, value: &str) -> Result<(), (StatusCode, Json<Value>)> {
-    if value.len() > MAX_FIELD_BYTES {
+    if value.len() > MAX_TEXT_FIELD_BYTES {
         return Err(api_err(
             StatusCode::BAD_REQUEST,
-            format!("`{field}` exceeds {MAX_FIELD_BYTES} byte limit"),
+            format!("`{field}` exceeds {MAX_TEXT_FIELD_BYTES} byte limit"),
         ));
     }
     if store::has_control_chars(value) {
@@ -328,15 +323,35 @@ fn amend_decision(state: Arc<MapState>, name: String, body: AmendDecision) -> Ap
     }
     if let Some(ref c) = body.choice {
         check_field_len("choice", c)?;
+        if c.len() > MAX_CHOICE_BYTES {
+            return Err(api_err(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "choice must be \u{2264}{MAX_CHOICE_BYTES} characters \
+                     ({} given)",
+                    c.len()
+                ),
+            ));
+        }
     }
     if let Some(ref r) = body.reason {
         check_field_len("reason", r)?;
-    }
-    if let Some(ref t) = body.tags {
-        if t.len() > MAX_TAGS {
+        if r.trim().len() < MIN_REASON_BYTES {
             return Err(api_err(
                 StatusCode::BAD_REQUEST,
-                format!("tags exceeds {MAX_TAGS} item limit"),
+                format!(
+                    "reason must be at least {MIN_REASON_BYTES} characters \
+                     ({} given)",
+                    r.trim().len()
+                ),
+            ));
+        }
+    }
+    if let Some(ref t) = body.tags {
+        if t.len() > MAX_ARRAY_ITEMS {
+            return Err(api_err(
+                StatusCode::BAD_REQUEST,
+                format!("tags exceeds {MAX_ARRAY_ITEMS} item limit"),
             ));
         }
         for tag in t {

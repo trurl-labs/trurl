@@ -3,26 +3,12 @@ use std::collections::HashSet;
 use serde_json::Value;
 
 use crate::store::graph::Severity;
+use crate::store::limits::{
+    MAX_ARRAY_ITEMS, MAX_CHOICE_BYTES, MAX_TEXT_FIELD_BYTES, MIN_REASON_BYTES,
+};
 use crate::store::{self, Store};
 
 // ── Argument helpers ────────────────────────────────────────────────────────
-
-/// Maximum byte length for any single text argument to a write tool.
-/// Prevents unbounded disk writes from malicious or buggy MCP clients.
-/// Design conversations are typically 10-50 KB total; a single argument
-/// should never approach that.
-pub(super) const MAX_TEXT_ARG_BYTES: usize = 50_000;
-
-/// Maximum number of elements in any array argument.
-pub(super) const MAX_ARRAY_ARG_LEN: usize = 100;
-
-/// Minimum byte length for a decision's `reason` field.
-/// Forces actual reasoning instead of rubber-stamp approvals.
-pub(super) const MIN_REASON_BYTES: usize = 10;
-
-/// Maximum byte length for a decision's `choice` field.
-/// A choice is a concise title, not a paragraph.
-pub(super) const MAX_CHOICE_BYTES: usize = 200;
 
 pub(super) fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     let val = args
@@ -30,9 +16,9 @@ pub(super) fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, Str
         .and_then(|v| v.as_str())
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| format!("missing required parameter: {key}"))?;
-    if val.len() > MAX_TEXT_ARG_BYTES {
+    if val.len() > MAX_TEXT_FIELD_BYTES {
         return Err(format!(
-            "`{key}` exceeds {MAX_TEXT_ARG_BYTES} byte limit ({} bytes)",
+            "`{key}` exceeds {MAX_TEXT_FIELD_BYTES} byte limit ({} bytes)",
             val.len()
         ));
     }
@@ -48,8 +34,8 @@ pub(super) fn opt_str<'a>(args: &'a Value, key: &str) -> Result<Option<&'a str>,
         .and_then(|v| v.as_str())
         .filter(|s| !s.trim().is_empty())
     {
-        Some(val) if val.len() > MAX_TEXT_ARG_BYTES => Err(format!(
-            "`{key}` exceeds {MAX_TEXT_ARG_BYTES} byte limit ({} bytes)",
+        Some(val) if val.len() > MAX_TEXT_FIELD_BYTES => Err(format!(
+            "`{key}` exceeds {MAX_TEXT_FIELD_BYTES} byte limit ({} bytes)",
             val.len()
         )),
         Some(val) if has_control_chars(val) => {
@@ -80,16 +66,16 @@ pub(super) fn opt_str_array(args: &Value, key: &str) -> Result<Vec<String>, Stri
                 .collect()
         })
         .unwrap_or_default();
-    if items.len() > MAX_ARRAY_ARG_LEN {
+    if items.len() > MAX_ARRAY_ITEMS {
         return Err(format!(
-            "`{key}` has too many items ({}, max {MAX_ARRAY_ARG_LEN})",
+            "`{key}` has too many items ({}, max {MAX_ARRAY_ITEMS})",
             items.len()
         ));
     }
     for s in &items {
-        if s.len() > MAX_TEXT_ARG_BYTES {
+        if s.len() > MAX_TEXT_FIELD_BYTES {
             return Err(format!(
-                "`{key}` item exceeds {MAX_TEXT_ARG_BYTES} byte limit"
+                "`{key}` item exceeds {MAX_TEXT_FIELD_BYTES} byte limit"
             ));
         }
     }
@@ -101,9 +87,9 @@ pub(super) fn require_str_array(args: &Value, key: &str) -> Result<Vec<String>, 
         .get(key)
         .and_then(|v| v.as_array())
         .ok_or_else(|| format!("missing required parameter: {key}"))?;
-    if arr.len() > MAX_ARRAY_ARG_LEN {
+    if arr.len() > MAX_ARRAY_ITEMS {
         return Err(format!(
-            "`{key}` has too many items ({}, max {MAX_ARRAY_ARG_LEN})",
+            "`{key}` has too many items ({}, max {MAX_ARRAY_ITEMS})",
             arr.len()
         ));
     }
@@ -117,9 +103,9 @@ pub(super) fn require_str_array(args: &Value, key: &str) -> Result<Vec<String>, 
         return Err(format!("{key} must contain at least one non-empty string"));
     }
     for s in &strings {
-        if s.len() > MAX_TEXT_ARG_BYTES {
+        if s.len() > MAX_TEXT_FIELD_BYTES {
             return Err(format!(
-                "`{key}` item exceeds {MAX_TEXT_ARG_BYTES} byte limit"
+                "`{key}` item exceeds {MAX_TEXT_FIELD_BYTES} byte limit"
             ));
         }
     }

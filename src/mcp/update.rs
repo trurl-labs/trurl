@@ -1,10 +1,11 @@
 use serde_json::Value;
 
 use crate::store::graph::Direction;
+use crate::store::limits::{MAX_CHOICE_BYTES, MIN_REASON_BYTES};
 use crate::store::schema::EdgeKind;
 use crate::store::{self, Store};
 
-use super::write::{MAX_CHOICE_BYTES, MIN_REASON_BYTES, opt_str, record_decision, require_str};
+use super::write::{opt_str, record_decision, require_str};
 
 // ── remove_decision ─────────────────────────────────────────────────────────
 

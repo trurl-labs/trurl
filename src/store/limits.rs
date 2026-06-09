@@ -1,0 +1,23 @@
+//! Shared input-validation constants for all trust boundaries.
+//!
+//! Every entry point (MCP server, map REST API, CLI) enforces the same
+//! limits on untrusted input. Defining them in one place prevents
+//! silent drift between adapters — a constant here changes everywhere,
+//! and the compiler catches any adapter that still uses a local copy.
+
+/// Maximum byte length for any single text field (choice, reason,
+/// description, tag, name, etc.). Design conversations are typically
+/// 10–50 KB total; a single argument should never approach that.
+pub const MAX_TEXT_FIELD_BYTES: usize = 50_000;
+
+/// Maximum number of elements in any array field (alternatives,
+/// depends_on, constrains, tags, decisions, components).
+pub const MAX_ARRAY_ITEMS: usize = 100;
+
+/// Minimum byte length for a decision's `reason` field.
+/// Forces actual reasoning instead of rubber-stamp approvals.
+pub const MIN_REASON_BYTES: usize = 10;
+
+/// Maximum byte length for a decision's `choice` field.
+/// A choice is a concise title, not a paragraph.
+pub const MAX_CHOICE_BYTES: usize = 200;

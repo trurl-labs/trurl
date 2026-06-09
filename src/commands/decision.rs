@@ -353,7 +353,7 @@ mod tests {
             kind: EdgeKind::DependsOn,
         });
         store
-            .commit_batch(&lock, vec![], vec![], Some(&state.graph_index))
+            .commit_batch(&lock, vec![], vec![], Some(state.graph_index))
             .unwrap();
         drop(lock);
 
@@ -412,7 +412,7 @@ mod tests {
             kind: EdgeKind::MemberOf,
         });
         store
-            .commit_batch(&lock, vec![write], vec![], Some(&state.graph_index))
+            .commit_batch(&lock, vec![write], vec![], Some(state.graph_index))
             .unwrap();
         drop(lock);
 
@@ -460,7 +460,7 @@ mod tests {
             kind: EdgeKind::Constrains,
         });
         store
-            .commit_batch(&lock, vec![], vec![], Some(&state.graph_index))
+            .commit_batch(&lock, vec![], vec![], Some(state.graph_index))
             .unwrap();
         drop(lock);
 

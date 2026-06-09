@@ -24,15 +24,15 @@ use super::{Store, StoreLock};
 /// A file write staged for batch commit.
 /// Created via [`Store::prepare_write`], executed via [`Store::commit_batch`].
 #[must_use = "a pending write must be passed to commit_batch or commit_with_graph"]
-pub struct PendingWrite {
-    pub(crate) target: PathBuf,
-    pub(crate) content: String,
+pub(crate) struct PendingWrite {
+    target: PathBuf,
+    content: String,
 }
 
 impl PendingWrite {
     /// BLAKE3 hash of the serialized content that will be written.
     #[must_use]
-    pub fn content_hash(&self) -> String {
+    pub(crate) fn content_hash(&self) -> String {
         super::hash_bytes(self.content.as_bytes())
     }
 }
@@ -91,7 +91,7 @@ impl Store {
     /// Serializes to TOML, writes to a temp file, validates by deserializing
     /// back from disk, then renames to the final path. Caller **must** hold
     /// a [`StoreLock`].
-    pub fn write_atomic<T: Serialize + DeserializeOwned>(
+    pub(crate) fn write_atomic<T: Serialize + DeserializeOwned>(
         &self,
         _lock: &StoreLock,
         target: &Path,
@@ -149,7 +149,7 @@ impl Store {
     /// The content is deserialized back to `T` at this stage so that type-safe
     /// verification happens while the type is still known; `commit_batch`
     /// then verifies filesystem-level integrity via byte-compare.
-    pub fn prepare_write<T: Serialize + DeserializeOwned>(
+    pub(crate) fn prepare_write<T: Serialize + DeserializeOwned>(
         &self,
         target: &Path,
         value: &T,
@@ -176,12 +176,12 @@ impl Store {
     /// Phase 4: remove old files (best-effort — renames already committed).
     ///
     /// Caller **must** hold a [`StoreLock`].
-    pub fn commit_batch(
+    pub(crate) fn commit_batch(
         &self,
         _lock: &StoreLock,
         writes: Vec<PendingWrite>,
         removes: Vec<PathBuf>,
-        graph_update: Option<&GraphIndex>,
+        graph_update: Option<GraphIndex>,
     ) -> Result<()> {
         if writes.is_empty() && removes.is_empty() && graph_update.is_none() {
             return Ok(());
@@ -190,13 +190,12 @@ impl Store {
         // Build the full set of writes: node files first, graph.toml last.
         let mut all_writes = writes;
 
-        if let Some(index) = graph_update {
-            let mut sorted = index.clone();
-            sorted.nodes.sort_by(|a, b| a.name.cmp(&b.name));
-            sorted
+        if let Some(mut index) = graph_update {
+            index.nodes.sort_by(|a, b| a.name.cmp(&b.name));
+            index
                 .edges
                 .sort_by(|a, b| (&a.from, &a.to, &a.kind).cmp(&(&b.from, &b.to, &b.kind)));
-            let content = toml::to_string_pretty(&sorted)?;
+            let content = toml::to_string_pretty(&index)?;
             toml::from_str::<GraphIndex>(&content).map_err(|e| {
                 Error::Validation(format!("graph index round-trip verification failed: {e}"))
             })?;
@@ -305,7 +304,7 @@ impl Store {
     ///
     /// On success, `state.graph` is updated in-place with the validated
     /// graph — callers do **not** need to call `rebuild_graph()`.
-    pub fn commit_with_graph(
+    fn commit_with_graph(
         &self,
         lock: &StoreLock,
         writes: Vec<PendingWrite>,
@@ -337,7 +336,7 @@ impl Store {
             return Err(Error::GraphIntegrity(errors.join("; ")));
         }
         let index = graph.to_index();
-        self.commit_batch(lock, writes, removes, Some(&index))?;
+        self.commit_batch(lock, writes, removes, Some(index))?;
 
         // Reuse the validated graph — avoids a redundant rebuild_graph() in
         // every caller.
@@ -346,7 +345,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn remove_file(&self, _lock: &StoreLock, target: &Path) -> Result<()> {
+    pub(crate) fn remove_file(&self, _lock: &StoreLock, target: &Path) -> Result<()> {
         self.verify_path(target)?;
         Ok(fs::remove_file(target)?)
     }
@@ -1191,7 +1190,7 @@ mod tests {
         };
 
         store
-            .commit_batch(&lock, vec![], vec![], Some(&index))
+            .commit_batch(&lock, vec![], vec![], Some(index))
             .unwrap();
 
         assert!(store.graph_path().exists());
@@ -1243,7 +1242,7 @@ mod tests {
         };
 
         store
-            .commit_batch(&lock, vec![], vec![], Some(&index))
+            .commit_batch(&lock, vec![], vec![], Some(index))
             .unwrap();
 
         let read_back: GraphIndex =
