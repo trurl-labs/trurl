@@ -1,5 +1,6 @@
 use std::sync::LazyLock;
 
+use serde::Serialize;
 use serde_json::Value;
 
 use super::context;
@@ -490,19 +491,52 @@ fn dispatch_advance(state: &ProjectState, args: &Value) -> Value {
     }
 }
 
+// ── MCP content envelope ────────────────────────────────────────────────────
+
+/// Typed MCP tool-response envelope. Serialized via `serde_json::to_value`
+/// instead of the `json!()` macro — field names are checked at compile
+/// time, and the struct layout matches the MCP spec exactly.
+#[derive(Serialize)]
+struct ToolEnvelope {
+    content: [TextBlock; 1],
+    /// Present and `true` for errors, omitted for success.
+    #[serde(rename = "isError", skip_serializing_if = "Option::is_none")]
+    is_error: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct TextBlock {
+    r#type: &'static str,
+    text: String,
+}
+
 pub(crate) fn tool_result(payload: &Value) -> Value {
-    serde_json::json!({
-        "content": [{
-            "type": "text",
-            "text": serde_json::to_string(payload)
-                .unwrap_or_else(|_| "{}".to_string())
-        }]
+    let text = serde_json::to_string(payload).unwrap_or_else(|_| "{}".into());
+    serde_json::to_value(ToolEnvelope {
+        content: [TextBlock {
+            r#type: "text",
+            text,
+        }],
+        is_error: None,
     })
+    .unwrap_or_else(|_| fallback_error("serialization failed"))
 }
 
 pub(crate) fn tool_error(message: &str) -> Value {
+    serde_json::to_value(ToolEnvelope {
+        content: [TextBlock {
+            r#type: "text",
+            text: message.into(),
+        }],
+        is_error: Some(true),
+    })
+    .unwrap_or_else(|_| fallback_error(message))
+}
+
+/// Last-resort fallback if typed serialization fails (should never happen).
+fn fallback_error(msg: &str) -> Value {
     serde_json::json!({
-        "content": [{ "type": "text", "text": message }],
+        "content": [{"type": "text", "text": msg}],
         "isError": true
     })
 }

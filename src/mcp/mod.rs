@@ -6,7 +6,7 @@ mod watcher;
 mod write;
 
 use std::io;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 
 use serde_json::Value;
 
@@ -127,8 +127,10 @@ fn handle(
     })
 }
 
-fn handle_initialize() -> std::result::Result<Value, (i32, String)> {
-    Ok(serde_json::json!({
+/// Static initialize response. Built once on first access — the protocol
+/// version and server info are compile-time constants.
+static INITIALIZE_RESULT: LazyLock<Value> = LazyLock::new(|| {
+    serde_json::json!({
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": {
             "tools": {}
@@ -137,7 +139,11 @@ fn handle_initialize() -> std::result::Result<Value, (i32, String)> {
             "name": "trurlic",
             "version": env!("CARGO_PKG_VERSION"),
         }
-    }))
+    })
+});
+
+fn handle_initialize() -> std::result::Result<Value, (i32, String)> {
+    Ok(INITIALIZE_RESULT.clone())
 }
 
 fn handle_tools_call(

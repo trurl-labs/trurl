@@ -82,16 +82,16 @@ pub(crate) fn get_context(
                 .collect();
             let transitive_deps = graph.transitive_depends_on(&seeds, 3);
 
-            let brief = build_brief(
+            let brief = build_brief(&BriefParams {
                 component,
-                task_description,
-                &component_decisions,
-                &project_decisions,
-                &related_decisions,
-                &transitive_deps,
-                &patterns,
-                &uncovered_concerns,
-            );
+                task: task_description,
+                component_decisions: &component_decisions,
+                project_decisions: &project_decisions,
+                related_decisions: &related_decisions,
+                transitive_deps: &transitive_deps,
+                patterns: &patterns,
+                uncovered_concerns: &uncovered_concerns,
+            });
 
             let mut seen: HashSet<&str> = HashSet::new();
             for (name, _) in &component_decisions {
@@ -201,62 +201,69 @@ fn project_context(
 
 // ── build_brief ──────────────────────────────────────────────────────────
 
+/// Collected inputs for brief assembly. Replaces the 8-parameter
+/// `build_brief` signature with a single typed bundle.
+struct BriefParams<'a> {
+    component: &'a str,
+    task: Option<&'a str>,
+    component_decisions: &'a [(&'a Arc<str>, &'a DecisionFile)],
+    project_decisions: &'a [(&'a Arc<str>, &'a DecisionFile)],
+    related_decisions: &'a [(&'a Arc<str>, &'a DecisionFile)],
+    transitive_deps: &'a [(&'a Arc<str>, &'a DecisionFile)],
+    patterns: &'a [(&'a Arc<str>, &'a PatternFile)],
+    uncovered_concerns: &'a [&'a str],
+}
+
 /// Format the authoritative brief that coding agents consume directly.
 ///
 /// When `uncovered_concerns` outnumber the covered ones, the brief opens
 /// with a degradation warning — belt-and-suspenders for agents that
 /// bypass `advance`.
-#[allow(clippy::too_many_arguments)]
-fn build_brief(
-    component: &str,
-    task_description: Option<&str>,
-    component_decisions: &[(&Arc<str>, &DecisionFile)],
-    project_decisions: &[(&Arc<str>, &DecisionFile)],
-    related_decisions: &[(&Arc<str>, &DecisionFile)],
-    transitive_deps: &[(&Arc<str>, &DecisionFile)],
-    patterns: &[(&Arc<str>, &PatternFile)],
-    uncovered_concerns: &[&str],
-) -> String {
+fn build_brief(p: &BriefParams<'_>) -> String {
     let mut brief = String::with_capacity(512);
 
     // Degradation warning: when more concerns are uncovered than covered,
     // the design is incomplete and the agent should proceed with caution.
-    let covered_count = concerns::CONCERNS.len() - uncovered_concerns.len();
-    if uncovered_concerns.len() > covered_count {
+    let covered_count = concerns::CONCERNS.len() - p.uncovered_concerns.len();
+    if p.uncovered_concerns.len() > covered_count {
         brief.push_str(&format!(
             "\u{26a0} DESIGN INCOMPLETE \u{2014} {} concern areas have no decisions:\n  {}\n\n\
              Proceed with caution. Existing decisions below are constraints, \
              but expect gaps.\n\n",
-            uncovered_concerns.len(),
-            uncovered_concerns.join(", "),
+            p.uncovered_concerns.len(),
+            p.uncovered_concerns.join(", "),
         ));
     }
 
-    if let Some(task) = task_description {
+    if let Some(task) = p.task {
         brief.push_str(&format!("TASK: {task}\n\n"));
     }
 
-    if !project_decisions.is_empty() {
+    if !p.project_decisions.is_empty() {
         brief.push_str("RULES (inviolable — every generated line must respect these):\n");
-        for (_, d) in project_decisions {
+        for (_, d) in p.project_decisions {
             brief.push_str(&format!("- {}\n", d.decision.choice));
         }
         brief.push('\n');
     }
 
-    if !patterns.is_empty() {
+    if !p.patterns.is_empty() {
         brief.push_str("PATTERNS:\n");
-        for (name, p) in patterns {
-            brief.push_str(&format!("- {}: {}\n", name.as_ref(), p.pattern.description));
+        for (name, pat) in p.patterns {
+            brief.push_str(&format!(
+                "- {}: {}\n",
+                name.as_ref(),
+                pat.pattern.description
+            ));
         }
         brief.push('\n');
     }
 
-    brief.push_str(&format!("COMPONENT: {component}\n"));
-    if component_decisions.is_empty() {
+    brief.push_str(&format!("COMPONENT: {}\n", p.component));
+    if p.component_decisions.is_empty() {
         brief.push_str("- No decisions recorded yet.\n");
     } else {
-        for (_, d) in component_decisions {
+        for (_, d) in p.component_decisions {
             brief.push_str(&format!(
                 "- {} ({})\n",
                 d.decision.choice, d.decision.reason
@@ -265,9 +272,9 @@ fn build_brief(
     }
     brief.push('\n');
 
-    if !transitive_deps.is_empty() {
+    if !p.transitive_deps.is_empty() {
         brief.push_str("DEPENDENCIES:\n");
-        for (_, d) in transitive_deps {
+        for (_, d) in p.transitive_deps {
             brief.push_str(&format!(
                 "- {}: {} ({})\n",
                 d.decision.component, d.decision.choice, d.decision.reason
@@ -276,9 +283,9 @@ fn build_brief(
         brief.push('\n');
     }
 
-    if !related_decisions.is_empty() {
+    if !p.related_decisions.is_empty() {
         brief.push_str("RELATED:\n");
-        for (_, d) in related_decisions {
+        for (_, d) in p.related_decisions {
             brief.push_str(&format!(
                 "- {}: {}\n",
                 d.decision.component, d.decision.choice

@@ -164,8 +164,8 @@ fn read_line_bounded(reader: &mut impl BufRead, limit: usize) -> std::io::Result
 }
 
 pub(crate) fn write_response(writer: &mut impl Write, response: &Response) -> std::io::Result<()> {
-    let json = serde_json::to_string(response).map_err(std::io::Error::other)?;
-    writeln!(writer, "{json}")?;
+    serde_json::to_writer(&mut *writer, response).map_err(std::io::Error::other)?;
+    writer.write_all(b"\n")?;
     writer.flush()
 }
 
