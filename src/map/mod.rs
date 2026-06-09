@@ -110,6 +110,30 @@ pub(crate) async fn start(
         ))
         .with_state(map_state.clone());
 
+    // Bind to 127.0.0.1 only — never 0.0.0.0.
+    // Bind before building the router so the CSP can reference the actual port.
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port.unwrap_or(0)));
+    let listener = TcpListener::bind(addr).map_err(|e| {
+        crate::Error::Io(std::io::Error::new(
+            e.kind(),
+            format!("failed to bind {addr}: {e}"),
+        ))
+    })?;
+    let local_addr = listener.local_addr().map_err(crate::Error::Io)?;
+    let listener = tokio::net::TcpListener::from_std(listener).map_err(crate::Error::Io)?;
+
+    // Build CSP with the actual bound port — no wildcard.
+    let csp = format!(
+        "default-src 'self'; \
+         script-src 'self'; \
+         style-src 'self' 'unsafe-inline'; \
+         connect-src 'self' ws://127.0.0.1:{}",
+        local_addr.port(),
+    );
+
+    let csp_header = HeaderValue::try_from(csp)
+        .map_err(|e| crate::Error::Validation(format!("invalid CSP header value: {e}")))?;
+
     let app = Router::new()
         .nest("/api", api_routes)
         .route("/ws", get(ws::handler))
@@ -118,12 +142,7 @@ pub(crate) async fn start(
         .layer(
             tower_http::set_header::SetResponseHeaderLayer::if_not_present(
                 CONTENT_SECURITY_POLICY,
-                HeaderValue::from_static(
-                    "default-src 'self'; \
-                     script-src 'self'; \
-                     style-src 'self' 'unsafe-inline'; \
-                     connect-src 'self' ws://127.0.0.1:*",
-                ),
+                csp_header,
             ),
         )
         .layer(
@@ -140,17 +159,6 @@ pub(crate) async fn start(
         )
         .layer(DefaultBodyLimit::max(1_048_576)) // 1 MB
         .layer(CorsLayer::new()); // Deny all cross-origin requests (spec: §Security).
-
-    // Bind to 127.0.0.1 only — never 0.0.0.0.
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port.unwrap_or(0)));
-    let listener = TcpListener::bind(addr).map_err(|e| {
-        crate::Error::Io(std::io::Error::new(
-            e.kind(),
-            format!("failed to bind {addr}: {e}"),
-        ))
-    })?;
-    let local_addr = listener.local_addr().map_err(crate::Error::Io)?;
-    let listener = tokio::net::TcpListener::from_std(listener).map_err(crate::Error::Io)?;
 
     let url = format!("http://{local_addr}/?token={token}");
     eprintln!("trurlic: map → {url}");

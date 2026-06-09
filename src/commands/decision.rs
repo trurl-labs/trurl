@@ -74,7 +74,7 @@ pub fn remove_decision(cwd: &Path, name: &str) -> Result<()> {
         .retain(|e| e.from != name && e.to != name);
 
     let removes = vec![store.decision_path(name)];
-    store.commit_with_graph(&lock, vec![], removes, &state)?;
+    store.commit_with_graph(&lock, vec![], removes, &mut state)?;
     println!("Removed decision `{name}`");
     Ok(())
 }

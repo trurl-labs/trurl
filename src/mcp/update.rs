@@ -64,8 +64,6 @@ pub(crate) fn remove_decision(
         return Err(e.to_string());
     }
 
-    state.rebuild_graph();
-
     Ok(serde_json::json!({
         "removed": true,
         "blocked_by": [],
@@ -176,8 +174,6 @@ fn amend_decision(
         }
         return Err(e.to_string());
     }
-
-    state.rebuild_graph();
 
     // Collect affected patterns and decisions.
     let (affected_patterns, affected_decisions) = collect_affected(&state.graph, name);

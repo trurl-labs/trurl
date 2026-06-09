@@ -268,12 +268,15 @@ impl Store {
     /// a deterministically sorted index and commits it alongside the
     /// provided node file writes. `graph.toml` is renamed last, serving
     /// as the commit point per the storage spec.
+    ///
+    /// On success, `state.graph` is updated in-place with the validated
+    /// graph — callers do **not** need to call `rebuild_graph()`.
     pub fn commit_with_graph(
         &self,
         lock: &StoreLock,
         writes: Vec<PendingWrite>,
         removes: Vec<PathBuf>,
-        state: &ProjectState,
+        state: &mut ProjectState,
     ) -> Result<()> {
         // Pre-check: duplicate node names in the index would cause silent
         // data loss during InMemoryGraph construction (HashMap overwrite).
@@ -300,7 +303,13 @@ impl Store {
             return Err(Error::GraphIntegrity(errors.join("; ")));
         }
         let index = graph.to_index();
-        self.commit_batch(lock, writes, removes, Some(&index))
+        self.commit_batch(lock, writes, removes, Some(&index))?;
+
+        // Reuse the validated graph — avoids a redundant rebuild_graph() in
+        // every caller.
+        state.graph = graph;
+
+        Ok(())
     }
 
     pub fn remove_file(&self, _lock: &StoreLock, target: &Path) -> Result<()> {
@@ -394,7 +403,6 @@ impl Store {
             return Err(e);
         }
 
-        state.rebuild_graph();
         Ok(stem)
     }
 
@@ -723,7 +731,7 @@ mod tests {
         state.components.insert("auth".into(), comp);
 
         store
-            .commit_with_graph(&lock, vec![write], vec![], &state)
+            .commit_with_graph(&lock, vec![write], vec![], &mut state)
             .unwrap();
 
         assert!(store.component_path("auth").exists());
@@ -758,7 +766,7 @@ mod tests {
             .insert("orphan".into(), sample_decision("orphan", "nonexistent"));
 
         let err = store
-            .commit_with_graph(&lock, vec![], vec![], &state)
+            .commit_with_graph(&lock, vec![], vec![], &mut state)
             .unwrap_err();
         assert!(matches!(err, Error::GraphIntegrity(_)));
     }
@@ -803,7 +811,7 @@ mod tests {
         state.components.insert("a-comp".into(), c2);
 
         store
-            .commit_with_graph(&lock, vec![w1, w2], vec![], &state)
+            .commit_with_graph(&lock, vec![w1, w2], vec![], &mut state)
             .unwrap();
 
         let index: GraphIndex =

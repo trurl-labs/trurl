@@ -44,7 +44,7 @@ pub fn add_component(cwd: &Path, name: &str, description: Option<&str>) -> Resul
 
     state.components.insert(name.into(), comp);
 
-    store.commit_with_graph(&lock, vec![write], vec![], &state)?;
+    store.commit_with_graph(&lock, vec![write], vec![], &mut state)?;
     println!("Added component `{name}`");
     Ok(())
 }
@@ -81,7 +81,7 @@ pub fn add_connection(cwd: &Path, from: &str, to: &str) -> Result<()> {
     });
 
     // Only graph.toml changes — no node files modified.
-    store.commit_with_graph(&lock, vec![], vec![], &state)?;
+    store.commit_with_graph(&lock, vec![], vec![], &mut state)?;
     println!("Connected `{from}` → `{to}`");
     Ok(())
 }
@@ -172,7 +172,7 @@ pub fn rename_component(cwd: &Path, old: &str, new: &str) -> Result<()> {
     }
 
     let removes = vec![store.component_path(old)];
-    store.commit_with_graph(&lock, writes, removes, &state)?;
+    store.commit_with_graph(&lock, writes, removes, &mut state)?;
     println!("Renamed component `{old}` → `{new}`");
     Ok(())
 }
@@ -202,7 +202,7 @@ pub fn remove_component(cwd: &Path, name: &str) -> Result<()> {
         .retain(|e| e.from != name && e.to != name);
 
     let removes = vec![store.component_path(name)];
-    store.commit_with_graph(&lock, vec![], removes, &state)?;
+    store.commit_with_graph(&lock, vec![], removes, &mut state)?;
     println!("Removed component `{name}`");
     Ok(())
 }
@@ -227,7 +227,7 @@ pub fn remove_connection(cwd: &Path, from: &str, to: &str) -> Result<()> {
         .edges
         .retain(|e| !(e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo));
 
-    store.commit_with_graph(&lock, vec![], vec![], &state)?;
+    store.commit_with_graph(&lock, vec![], vec![], &mut state)?;
     println!("Disconnected `{from}` → `{to}`");
     Ok(())
 }

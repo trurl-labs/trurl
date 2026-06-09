@@ -20,9 +20,9 @@ pub struct ProjectState {
     pub decisions: BTreeMap<String, DecisionFile>,
     pub patterns: BTreeMap<String, PatternFile>,
     pub graph_index: GraphIndex,
-    /// Cached in-memory graph, built at construction. Reflects the state
-    /// of the other fields at that point. Call [`rebuild_graph`] after
-    /// mutating `graph_index`, `components`, `decisions`, or `patterns`.
+    /// Cached in-memory graph, built at construction. Kept in sync by
+    /// [`Store::commit_with_graph`], which assigns the validated graph
+    /// on successful commit.
     pub graph: InMemoryGraph,
 }
 
@@ -65,6 +65,12 @@ impl ProjectState {
     }
 
     /// Refresh the cached graph to match the current field values.
+    ///
+    /// Production write paths use [`Store::commit_with_graph`] which
+    /// assigns the validated graph directly. This method remains for
+    /// test helpers that mutate `graph_index` without going through
+    /// the commit pipeline.
+    #[cfg(test)]
     pub fn rebuild_graph(&mut self) {
         self.graph = Self::build_graph_from(
             &self.graph_index,
@@ -207,6 +213,18 @@ pub fn is_valid_kebab_case(name: &str) -> bool {
 #[must_use]
 pub fn is_reserved_node_name(name: &str) -> bool {
     name == "project"
+}
+
+/// Reject ASCII control characters that could corrupt TOML files or
+/// produce surprising on-disk content. Allows common whitespace
+/// (newline, carriage return, tab).
+///
+/// Shared across all mutation entry points (MCP, map REST API, CLI) so
+/// every path enforces the same input hygiene.
+#[must_use]
+pub fn has_control_chars(s: &str) -> bool {
+    s.bytes()
+        .any(|b| b < 0x20 && b != b'\n' && b != b'\r' && b != b'\t')
 }
 
 // ── Slugify ─────────────────────────────────────────────────────────────────
@@ -466,6 +484,43 @@ mod tests {
             unique_decision_stem(&state, "state-in-redis").unwrap(),
             "state-in-redis-2"
         );
+    }
+
+    // ── has_control_chars ─────────────────────────────────────────────
+
+    #[test]
+    fn control_chars_rejects_nul() {
+        assert!(has_control_chars("hello\x00world"));
+    }
+
+    #[test]
+    fn control_chars_rejects_bell() {
+        assert!(has_control_chars("alert\x07"));
+    }
+
+    #[test]
+    fn control_chars_rejects_escape() {
+        assert!(has_control_chars("\x1b[31m red"));
+    }
+
+    #[test]
+    fn control_chars_allows_normal_whitespace() {
+        assert!(!has_control_chars("line\nnext\r\nand\ttab"));
+    }
+
+    #[test]
+    fn control_chars_allows_plain_text() {
+        assert!(!has_control_chars("JWT with DPoP binding, 15min lease"));
+    }
+
+    #[test]
+    fn control_chars_allows_empty() {
+        assert!(!has_control_chars(""));
+    }
+
+    #[test]
+    fn control_chars_allows_unicode() {
+        assert!(!has_control_chars("café — naïve résumé"));
     }
 
     #[test]

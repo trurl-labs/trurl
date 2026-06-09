@@ -62,9 +62,11 @@ pub(super) fn opt_str<'a>(args: &'a Value, key: &str) -> Result<Option<&'a str>,
 
 /// Reject ASCII control characters that could corrupt TOML files.
 /// Allows common whitespace (newline, carriage return, tab).
+///
+/// Delegates to the shared store-level function so the same rules apply
+/// regardless of mutation entry point (MCP, map REST API, CLI).
 fn has_control_chars(s: &str) -> bool {
-    s.bytes()
-        .any(|b| b < 0x20 && b != b'\n' && b != b'\r' && b != b'\t')
+    crate::store::has_control_chars(s)
 }
 
 pub(super) fn opt_str_array(args: &Value, key: &str) -> Result<Vec<String>, String> {
@@ -380,8 +382,6 @@ pub(crate) fn record_pattern(
         return Err(e.to_string());
     }
 
-    state.rebuild_graph();
-
     Ok(serde_json::json!({
         "name": slug,
         "path": store.pattern_path(&slug).display().to_string(),
@@ -443,7 +443,6 @@ pub(crate) fn add_component(
         state.components.remove(name);
         return Err(e.to_string());
     }
-    state.rebuild_graph();
 
     let mut warnings: Vec<String> = Vec::new();
     if description.is_empty() {
@@ -503,7 +502,6 @@ pub(crate) fn add_connection(
         state.rollback_graph(checkpoint);
         return Err(e.to_string());
     }
-    state.rebuild_graph();
 
     Ok(serde_json::json!({
         "from": from,

@@ -70,6 +70,12 @@ fn check_field_len(field: &str, value: &str) -> Result<(), (StatusCode, Json<Val
             format!("`{field}` exceeds {MAX_FIELD_BYTES} byte limit"),
         ));
     }
+    if store::has_control_chars(value) {
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            format!("`{field}` contains invalid control characters"),
+        ));
+    }
     Ok(())
 }
 
@@ -288,13 +294,12 @@ fn write_component(state: Arc<MapState>, body: CreateComponent) -> ApiResult {
     };
     if let Err(e) = state
         .store
-        .commit_with_graph(&lock, vec![write], vec![], &ps)
+        .commit_with_graph(&lock, vec![write], vec![], &mut ps)
     {
         ps.rollback_graph(checkpoint);
         ps.components.remove(&body.name);
         return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
     }
-    ps.rebuild_graph();
 
     let name = body.name;
     ws::broadcast(
@@ -362,11 +367,13 @@ fn write_connection(state: Arc<MapState>, body: CreateConnection) -> ApiResult {
             return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
         }
     };
-    if let Err(e) = state.store.commit_with_graph(&lock, vec![], vec![], &ps) {
+    if let Err(e) = state
+        .store
+        .commit_with_graph(&lock, vec![], vec![], &mut ps)
+    {
         ps.rollback_graph(checkpoint);
         return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
     }
-    ps.rebuild_graph();
 
     ws::broadcast(
         &state.ws_tx,
@@ -484,7 +491,7 @@ fn amend_decision(state: Arc<MapState>, name: String, body: AmendDecision) -> Ap
     };
     if let Err(e) = state
         .store
-        .commit_with_graph(&lock, vec![write], vec![], &ps)
+        .commit_with_graph(&lock, vec![write], vec![], &mut ps)
     {
         if let Some(h) = old_hash {
             ps.update_node_hash(&name, h);
@@ -497,7 +504,6 @@ fn amend_decision(state: Arc<MapState>, name: String, body: AmendDecision) -> Ap
         ps.decisions.insert(name, old_dec);
         return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
     }
-    ps.rebuild_graph();
 
     ws::broadcast(
         &state.ws_tx,
@@ -553,14 +559,16 @@ fn remove_component(state: Arc<MapState>, name: String) -> ApiResult {
         }
     };
     let removes = vec![state.store.component_path(&name)];
-    if let Err(e) = state.store.commit_with_graph(&lock, vec![], removes, &ps) {
+    if let Err(e) = state
+        .store
+        .commit_with_graph(&lock, vec![], removes, &mut ps)
+    {
         if let Some(comp) = comp_snapshot {
             ps.components.insert(name, comp);
         }
         ps.restore_graph_node(removed);
         return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
     }
-    ps.rebuild_graph();
 
     ws::broadcast(&state.ws_tx, &[WsEvent::NodeRemoved { name: name.clone() }]);
     Ok(Json(json!({
@@ -608,14 +616,16 @@ fn remove_decision(state: Arc<MapState>, name: String) -> ApiResult {
         }
     };
     let removes = vec![state.store.decision_path(&name)];
-    if let Err(e) = state.store.commit_with_graph(&lock, vec![], removes, &ps) {
+    if let Err(e) = state
+        .store
+        .commit_with_graph(&lock, vec![], removes, &mut ps)
+    {
         if let Some(dec) = dec_snapshot {
             ps.decisions.insert(name, dec);
         }
         ps.restore_graph_node(removed);
         return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
     }
-    ps.rebuild_graph();
 
     ws::broadcast(&state.ws_tx, &[WsEvent::NodeRemoved { name: name.clone() }]);
     Ok(Json(json!({
@@ -667,11 +677,13 @@ fn remove_connection(state: Arc<MapState>, from: String, to: String) -> ApiResul
             return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
         }
     };
-    if let Err(e) = state.store.commit_with_graph(&lock, vec![], vec![], &ps) {
+    if let Err(e) = state
+        .store
+        .commit_with_graph(&lock, vec![], vec![], &mut ps)
+    {
         ps.graph_index.edges.push(removed_edge);
         return Err(api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
     }
-    ps.rebuild_graph();
 
     ws::broadcast(
         &state.ws_tx,
