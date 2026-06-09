@@ -369,14 +369,15 @@ fn deduce_fix(
     // designed (e.g. fixing a concurrency bug with zero concurrency
     // decisions on record).
     if decisions.is_empty()
-        && let Some(t) = task {
-            let relevant = task_relevant_concerns(uncovered, t);
-            if !relevant.is_empty() {
-                return Step::CoverConcerns {
-                    focus: top_n(&relevant, CONCERN_FOCUS_LIMIT),
-                };
-            }
+        && let Some(t) = task
+    {
+        let relevant = task_relevant_concerns(uncovered, t);
+        if !relevant.is_empty() {
+            return Step::CoverConcerns {
+                focus: top_n(&relevant, CONCERN_FOCUS_LIMIT),
+            };
         }
+    }
 
     // ImpactCheck: cross-component effects.
     let has_connections =
