@@ -373,17 +373,23 @@ fn deduce_harden(
 /// Simplified state machine for project-wide rules.
 ///
 /// No concern coverage — project decisions are cross-cutting principles
-/// that don't map to the 10 technical concern areas.
+/// that don't map to the 10 technical concern areas. Patterns serve as
+/// the progression signal: once decisions are recorded AND patterns are
+/// identified, the project is ready.
 fn advance_project(state: &ProjectState, task_type: Option<TaskType>, task: Option<&str>) -> Value {
     let graph = &state.graph;
     let decisions = graph.project_decisions();
     let has_decisions = !decisions.is_empty();
+    let has_patterns = !state.patterns.is_empty();
 
     let task_type = task_type.unwrap_or(if has_decisions {
         if task.is_some() {
             TaskType::Feature
+        } else if has_patterns {
+            // Decisions + patterns → fully learned. Default to ready.
+            TaskType::Feature // Feature with no uncovered → Ready
         } else {
-            TaskType::Review
+            TaskType::Learn // Has decisions but no patterns → still learning
         }
     } else {
         TaskType::NewComponent
@@ -397,19 +403,17 @@ fn advance_project(state: &ProjectState, task_type: Option<TaskType>, task: Opti
         "patterns": state.patterns.len(),
     });
 
+    let ready_action = serde_json::json!({
+        "tool": "get_context",
+        "args": { "component": "project", "task": task },
+        "instruction": "Project rules are established. \
+                        Call get_context for the brief.",
+    });
+
     let (step, ready, action) = match task_type {
         TaskType::NewComponent | TaskType::Harden => {
             if has_decisions {
-                (
-                    Step::Ready,
-                    true,
-                    serde_json::json!({
-                        "tool": "get_context",
-                        "args": { "component": "project", "task": task },
-                        "instruction": "Project rules are established. \
-                                        Call get_context for the brief.",
-                    }),
-                )
+                (Step::Ready, true, ready_action)
             } else {
                 (
                     Step::DefineScope,
@@ -426,16 +430,7 @@ fn advance_project(state: &ProjectState, task_type: Option<TaskType>, task: Opti
         }
         TaskType::Feature | TaskType::Fix => {
             if has_decisions {
-                (
-                    Step::Ready,
-                    true,
-                    serde_json::json!({
-                        "tool": "get_context",
-                        "args": { "component": "project", "task": task },
-                        "instruction": "Project rules are established. \
-                                        Call get_context for the brief.",
-                    }),
-                )
+                (Step::Ready, true, ready_action)
             } else {
                 (
                     Step::DefineScope,
@@ -451,20 +446,7 @@ fn advance_project(state: &ProjectState, task_type: Option<TaskType>, task: Opti
             }
         }
         TaskType::Learn => {
-            let instruction = if has_decisions {
-                "Present each project rule for understanding."
-            } else {
-                "No project rules recorded. The learn session should \
-                 explore what principles guide this project."
-            };
-            (
-                Step::WalkDecisions,
-                false,
-                step_prompt_action("project", "walk_decisions", task, instruction),
-            )
-        }
-        TaskType::Review => {
-            if has_decisions {
+            if !has_decisions {
                 (
                     Step::WalkDecisions,
                     false,
@@ -472,10 +454,28 @@ fn advance_project(state: &ProjectState, task_type: Option<TaskType>, task: Opti
                         "project",
                         "walk_decisions",
                         task,
-                        "Review project rules for drift.",
+                        "No project rules recorded. The learn session should \
+                         explore what principles guide this project.",
+                    ),
+                )
+            } else if !has_patterns {
+                (
+                    Step::WalkDecisions,
+                    false,
+                    step_prompt_action(
+                        "project",
+                        "walk_decisions",
+                        task,
+                        "Present each project rule for understanding. \
+                         After all are walked, identify patterns.",
                     ),
                 )
             } else {
+                (Step::Ready, true, ready_action)
+            }
+        }
+        TaskType::Review => {
+            if !has_decisions {
                 (
                     Step::DefineScope,
                     false,
@@ -486,9 +486,33 @@ fn advance_project(state: &ProjectState, task_type: Option<TaskType>, task: Opti
                         "No project rules to review. Run a design session.",
                     ),
                 )
+            } else if !has_patterns {
+                (
+                    Step::DriftCheck,
+                    false,
+                    step_prompt_action(
+                        "project",
+                        "drift_check",
+                        task,
+                        "Review project rules for drift. After review, \
+                         identify patterns across decisions.",
+                    ),
+                )
+            } else {
+                (Step::Ready, true, ready_action)
             }
         }
     };
+
+    if is_debug() {
+        eprintln!(
+            "trurl: project → {} (type={}, decisions={}, patterns={})",
+            step.as_str(),
+            task_type.as_str(),
+            decisions.len(),
+            state.patterns.len(),
+        );
+    }
 
     build_response("project", task_type, &step, ready, assessment, action)
 }
@@ -1348,6 +1372,86 @@ mod tests {
         assert_eq!(result["step"], "walk_decisions");
         assert_eq!(result["task_type"], "learn");
         assert_eq!(result["ready"], false);
+    }
+
+    #[test]
+    fn project_learn_with_patterns_is_ready() {
+        let state = build_state_with_patterns(
+            &[("auth", "Auth")],
+            &[(
+                "rule-1",
+                fresh_decision("project", "Fail-closed", "Safety", &[]),
+            )],
+            &[("p1", "Security posture", &["auth"])],
+        );
+        let result = advance(&state, "project", Some(TaskType::Learn), None).unwrap();
+
+        assert_eq!(result["step"], "ready");
+        assert_eq!(result["ready"], true);
+    }
+
+    #[test]
+    fn project_review_walks_when_no_patterns() {
+        let state = build_state(
+            &[],
+            &[(
+                "rule-1",
+                fresh_decision("project", "Fail-closed", "Safety", &[]),
+            )],
+        );
+        let result = advance(&state, "project", Some(TaskType::Review), None).unwrap();
+
+        assert_eq!(result["step"], "drift_check");
+        assert_eq!(result["ready"], false);
+    }
+
+    #[test]
+    fn project_review_with_patterns_is_ready() {
+        let state = build_state_with_patterns(
+            &[("auth", "Auth")],
+            &[(
+                "rule-1",
+                fresh_decision("project", "Fail-closed", "Safety", &[]),
+            )],
+            &[("p1", "Security posture", &["auth"])],
+        );
+        let result = advance(&state, "project", Some(TaskType::Review), None).unwrap();
+
+        assert_eq!(result["step"], "ready");
+        assert_eq!(result["ready"], true);
+    }
+
+    #[test]
+    fn project_inferred_learn_when_no_patterns() {
+        // Decisions exist, no task, no patterns → should infer Learn (not Review).
+        let state = build_state(
+            &[],
+            &[(
+                "rule-1",
+                fresh_decision("project", "Fail-closed", "Safety", &[]),
+            )],
+        );
+        let result = advance(&state, "project", None, None).unwrap();
+
+        assert_eq!(result["task_type"], "learn");
+        assert_eq!(result["step"], "walk_decisions");
+    }
+
+    #[test]
+    fn project_inferred_ready_when_complete() {
+        // Decisions + patterns + no task → should be ready.
+        let state = build_state_with_patterns(
+            &[("auth", "Auth")],
+            &[(
+                "rule-1",
+                fresh_decision("project", "Fail-closed", "Safety", &[]),
+            )],
+            &[("p1", "Security posture", &["auth"])],
+        );
+        let result = advance(&state, "project", None, None).unwrap();
+
+        assert_eq!(result["step"], "ready");
+        assert_eq!(result["ready"], true);
     }
 
     // ── Response shape ────────────────────────────────────────────────
