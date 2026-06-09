@@ -27,10 +27,8 @@ pub use schema::{
     COMPONENTS_DIR, ComponentFile, DECISIONS_DIR, DecisionFile, FORMAT_VERSION, GRAPH_FILE,
     PATTERNS_DIR, PatternFile, ProjectFile, STATE_DIR, STORE_DIR,
 };
-pub use state::{
-    ProjectState, has_control_chars, is_reserved_node_name, is_valid_kebab_case, slugify,
-};
-pub use write::{AmendDecisionParams, RecordDecisionParams};
+pub use state::{ProjectState, has_control_chars, is_valid_kebab_case, slugify};
+pub use write::{AmendDecisionParams, RecordDecisionParams, RecordPatternParams};
 
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 

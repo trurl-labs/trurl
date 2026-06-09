@@ -3,8 +3,7 @@ use std::collections::HashSet;
 use serde_json::Value;
 
 use crate::store::graph::Severity;
-use crate::store::schema::{EdgeEntry, EdgeKind, NodeEntry, NodeKind, Pattern, PatternFile};
-use crate::store::{self, Store, slugify};
+use crate::store::{self, Store};
 
 // ── Argument helpers ────────────────────────────────────────────────────────
 
@@ -278,109 +277,24 @@ pub(crate) fn record_pattern(
 ) -> Result<Value, String> {
     let name = require_str(args, "name")?;
     let description = require_str(args, "description")?;
-    let decision_names = require_str_array(args, "decisions")?;
-    let component_names = opt_str_array(args, "components")?;
+    let decisions = require_str_array(args, "decisions")?;
+    let components = opt_str_array(args, "components")?;
     let tags = opt_str_array(args, "tags")?;
 
-    if decision_names.len() < 2 {
-        return Err("a pattern must reference at least 2 decisions".into());
-    }
-
-    // Validate all referenced decisions exist.
-    for dname in &decision_names {
-        if !state.decisions.contains_key(dname.as_str()) {
-            return Err(format!("decision `{dname}` does not exist"));
-        }
-    }
-
-    // Resolve component list: explicit or inferred from decisions.
-    let components: Vec<String> = if component_names.is_empty() {
-        let mut inferred: HashSet<String> = HashSet::new();
-        for dname in &decision_names {
-            if let Some(dec) = state.decisions.get(dname.as_str()) {
-                let comp = &dec.decision.component;
-                if comp != "project" {
-                    inferred.insert(comp.clone());
-                }
-            }
-        }
-        inferred.into_iter().collect()
-    } else {
-        for cname in &component_names {
-            if !state.components.contains_key(cname.as_str()) {
-                return Err(format!("component `{cname}` does not exist"));
-            }
-        }
-        component_names
-    };
-
-    let slug = slugify(name);
-
-    if crate::store::is_reserved_node_name(&slug) {
-        return Err(format!(
-            "pattern slug `{slug}` is reserved — choose a different name"
-        ));
-    }
-
-    if state.patterns.contains_key(&slug) {
-        return Err(format!("pattern `{slug}` already exists"));
-    }
-    if state.components.contains_key(&slug) || state.decisions.contains_key(&slug) {
-        return Err(format!(
-            "name `{slug}` is already used by an existing component or decision"
-        ));
-    }
-
     let lock = store.lock().map_err(|e| e.to_string())?;
-
-    let pattern = PatternFile {
-        pattern: Pattern {
-            name: name.into(),
-            description: description.into(),
-        },
-    };
-
-    let write = store
-        .prepare_write(&store.pattern_path(&slug), &pattern)
+    let slug = store
+        .record_pattern(
+            &lock,
+            state,
+            store::RecordPatternParams {
+                name,
+                description,
+                decisions: &decisions,
+                components: &components,
+                tags: &tags,
+            },
+        )
         .map_err(|e| e.to_string())?;
-    let hash = write.content_hash();
-
-    // Checkpoint for rollback — O(1) since all mutations are appends.
-    let checkpoint = state.graph_checkpoint();
-
-    // Add pattern node.
-    state.graph_index.nodes.push(NodeEntry {
-        name: slug.clone(),
-        kind: NodeKind::Pattern,
-        tags,
-        hash,
-    });
-
-    // MemberOf edges (pattern → decision).
-    for dname in &decision_names {
-        state.graph_index.edges.push(EdgeEntry {
-            from: slug.clone(),
-            to: dname.clone(),
-            kind: EdgeKind::MemberOf,
-        });
-    }
-
-    // AppliesTo edges (pattern → component).
-    for cname in &components {
-        state.graph_index.edges.push(EdgeEntry {
-            from: slug.clone(),
-            to: cname.clone(),
-            kind: EdgeKind::AppliesTo,
-        });
-    }
-
-    state.patterns.insert(slug.clone(), pattern);
-
-    if let Err(e) = store.commit_with_graph(&lock, vec![write], vec![], state) {
-        state.patterns.remove(&slug);
-        state.rollback_graph(checkpoint);
-        return Err(e.to_string());
-    }
 
     Ok(serde_json::json!({
         "name": slug,
@@ -398,51 +312,10 @@ pub(crate) fn add_component(
     let name = require_str(args, "name")?;
     let description = opt_str(args, "description")?.unwrap_or_default();
 
-    if !store::is_valid_kebab_case(name) {
-        return Err(format!(
-            "invalid component name `{name}` — must be kebab-case"
-        ));
-    }
-    if store::is_reserved_node_name(name) {
-        return Err(format!("`{name}` is reserved"));
-    }
-    if state.components.contains_key(name) {
-        return Err(format!("component `{name}` already exists"));
-    }
-    if state.is_node_name_taken(name) {
-        return Err(format!(
-            "name `{name}` is already used by an existing decision or pattern"
-        ));
-    }
-
-    let comp = store::ComponentFile {
-        component: store::schema::Component {
-            name: name.into(),
-            description: description.into(),
-        },
-    };
-
-    let write = store
-        .prepare_write(&store.component_path(name), &comp)
-        .map_err(|e| e.to_string())?;
-    let hash = write.content_hash();
-
     let lock = store.lock().map_err(|e| e.to_string())?;
-
-    let checkpoint = state.graph_checkpoint();
-    state.graph_index.nodes.push(NodeEntry {
-        name: name.into(),
-        kind: NodeKind::Component,
-        tags: vec![],
-        hash,
-    });
-    state.components.insert(name.into(), comp);
-
-    if let Err(e) = store.commit_with_graph(&lock, vec![write], vec![], state) {
-        state.rollback_graph(checkpoint);
-        state.components.remove(name);
-        return Err(e.to_string());
-    }
+    store
+        .add_component(&lock, state, name, description)
+        .map_err(|e| e.to_string())?;
 
     let mut warnings: Vec<String> = Vec::new();
     if description.is_empty() {
@@ -470,38 +343,10 @@ pub(crate) fn add_connection(
     let from = require_str(args, "from")?;
     let to = require_str(args, "to")?;
 
-    if !state.components.contains_key(from) {
-        return Err(format!("source component `{from}` does not exist"));
-    }
-    if !state.components.contains_key(to) {
-        return Err(format!("target component `{to}` does not exist"));
-    }
-    if from == to {
-        return Err(format!("component `{from}` cannot connect to itself"));
-    }
-
-    let duplicate = state
-        .graph_index
-        .edges
-        .iter()
-        .any(|e| e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo);
-    if duplicate {
-        return Err(format!("connection `{from}` → `{to}` already exists"));
-    }
-
     let lock = store.lock().map_err(|e| e.to_string())?;
-
-    let checkpoint = state.graph_checkpoint();
-    state.graph_index.edges.push(EdgeEntry {
-        from: from.into(),
-        to: to.into(),
-        kind: EdgeKind::ConnectsTo,
-    });
-
-    if let Err(e) = store.commit_with_graph(&lock, vec![], vec![], state) {
-        state.rollback_graph(checkpoint);
-        return Err(e.to_string());
-    }
+    store
+        .add_connection(&lock, state, from, to)
+        .map_err(|e| e.to_string())?;
 
     Ok(serde_json::json!({
         "from": from,
@@ -595,6 +440,7 @@ fn detect_pattern_opportunity(state: &store::ProjectState, new_stem: &str) -> Va
 mod tests {
     use super::*;
     use crate::store::Store;
+    use crate::store::schema::EdgeKind;
     use serde_json::json;
     use tempfile::TempDir;
 

@@ -1,178 +1,26 @@
 use std::path::Path;
 
-use crate::store::schema::{Component, ComponentFile, EdgeEntry, EdgeKind, NodeEntry, NodeKind};
-use crate::store::{self};
 use crate::{Error, Result};
 
 use super::open_store_mut;
 
 pub fn add_component(cwd: &Path, name: &str, description: Option<&str>) -> Result<()> {
-    if !store::is_valid_kebab_case(name) {
-        return Err(Error::InvalidName(name.into()));
-    }
-    if store::is_reserved_node_name(name) {
-        return Err(Error::ReservedName(name.into()));
-    }
-
     let (store, lock, mut state) = open_store_mut(cwd)?;
-
-    if state.components.contains_key(name) {
-        return Err(Error::ComponentExists(name.into()));
-    }
-    if state.decisions.contains_key(name) || state.patterns.contains_key(name) {
-        return Err(Error::Validation(format!(
-            "name `{name}` is already used by an existing decision or pattern"
-        )));
-    }
-
-    let comp = ComponentFile {
-        component: Component {
-            name: name.into(),
-            description: description.unwrap_or_default().into(),
-        },
-    };
-
-    let write = store.prepare_write(&store.component_path(name), &comp)?;
-    let hash = write.content_hash();
-
-    state.graph_index.nodes.push(NodeEntry {
-        name: name.into(),
-        kind: NodeKind::Component,
-        tags: vec![],
-        hash,
-    });
-
-    state.components.insert(name.into(), comp);
-
-    store.commit_with_graph(&lock, vec![write], vec![], &mut state)?;
+    store.add_component(&lock, &mut state, name, description.unwrap_or_default())?;
     println!("Added component `{name}`");
     Ok(())
 }
 
 pub fn add_connection(cwd: &Path, from: &str, to: &str) -> Result<()> {
     let (store, lock, mut state) = open_store_mut(cwd)?;
-
-    if !state.components.contains_key(from) {
-        return Err(Error::ComponentNotFound(from.into()));
-    }
-    if !state.components.contains_key(to) {
-        return Err(Error::ComponentNotFound(to.into()));
-    }
-    if from == to {
-        return Err(Error::SelfConnection(from.into()));
-    }
-
-    let duplicate = state
-        .graph_index
-        .edges
-        .iter()
-        .any(|e| e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo);
-    if duplicate {
-        return Err(Error::DuplicateConnection {
-            from: from.into(),
-            to: to.into(),
-        });
-    }
-
-    state.graph_index.edges.push(EdgeEntry {
-        from: from.into(),
-        to: to.into(),
-        kind: EdgeKind::ConnectsTo,
-    });
-
-    // Only graph.toml changes — no node files modified.
-    store.commit_with_graph(&lock, vec![], vec![], &mut state)?;
+    store.add_connection(&lock, &mut state, from, to)?;
     println!("Connected `{from}` → `{to}`");
     Ok(())
 }
 
 pub fn rename_component(cwd: &Path, old: &str, new: &str) -> Result<()> {
-    if !store::is_valid_kebab_case(new) {
-        return Err(Error::InvalidName(new.into()));
-    }
-    if store::is_reserved_node_name(new) {
-        return Err(Error::ReservedName(new.into()));
-    }
-
     let (store, lock, mut state) = open_store_mut(cwd)?;
-
-    if !state.components.contains_key(old) {
-        return Err(Error::ComponentNotFound(old.into()));
-    }
-    if state.components.contains_key(new) {
-        return Err(Error::ComponentExists(new.into()));
-    }
-    if state.decisions.contains_key(new) || state.patterns.contains_key(new) {
-        return Err(Error::Validation(format!(
-            "name `{new}` is already used by an existing decision or pattern"
-        )));
-    }
-
-    let affected_decisions: Vec<String> = state
-        .decisions
-        .iter()
-        .filter(|(_, dec)| dec.decision.component == old)
-        .map(|(dname, _)| dname.clone())
-        .collect();
-
-    // Apply mutation in memory.
-    let mut renamed = state
-        .components
-        .remove(old)
-        .ok_or_else(|| Error::ComponentNotFound(old.into()))?;
-    renamed.component.name = new.into();
-    state.components.insert(new.into(), renamed);
-
-    for dec in state.decisions.values_mut() {
-        if dec.decision.component == old {
-            dec.decision.component = new.into();
-        }
-    }
-
-    // Update graph index: node name.
-    for node in &mut state.graph_index.nodes {
-        if node.name == old {
-            node.name = new.into();
-        }
-    }
-
-    // Update graph index: edge references.
-    for edge in &mut state.graph_index.edges {
-        if edge.from == old {
-            edge.from = new.into();
-        }
-        if edge.to == old {
-            edge.to = new.into();
-        }
-    }
-
-    // Prepare writes and update hashes.
-    let mut writes = Vec::new();
-
-    let comp_write = store.prepare_write(&store.component_path(new), &state.components[new])?;
-    if let Some(node) = state.graph_index.nodes.iter_mut().find(|n| n.name == new) {
-        node.hash = comp_write.content_hash();
-    }
-    writes.push(comp_write);
-
-    for dname in &affected_decisions {
-        let dec_write = store.prepare_write(
-            &store.decision_path(dname),
-            &state.decisions[dname.as_str()],
-        )?;
-        if let Some(node) = state
-            .graph_index
-            .nodes
-            .iter_mut()
-            .find(|n| n.name == *dname)
-        {
-            node.hash = dec_write.content_hash();
-        }
-        writes.push(dec_write);
-    }
-
-    let removes = vec![store.component_path(old)];
-    store.commit_with_graph(&lock, writes, removes, &mut state)?;
+    store.rename_component(&lock, &mut state, old, new)?;
     println!("Renamed component `{old}` → `{new}`");
     Ok(())
 }
@@ -180,54 +28,22 @@ pub fn rename_component(cwd: &Path, old: &str, new: &str) -> Result<()> {
 pub fn remove_component(cwd: &Path, name: &str) -> Result<()> {
     let (store, lock, mut state) = open_store_mut(cwd)?;
 
-    if !state.components.contains_key(name) {
-        return Err(Error::ComponentNotFound(name.into()));
-    }
-
     let cascade = state.graph.check_component_cascade(name);
-
     if cascade.is_blocked() {
         return Err(Error::CascadeBlocked(cascade.blocker_summary()));
     }
-
     for w in &cascade.warnings {
         eprintln!("warning: {}", w.message);
     }
 
-    state.components.remove(name);
-    state.graph_index.nodes.retain(|n| n.name != name);
-    state
-        .graph_index
-        .edges
-        .retain(|e| e.from != name && e.to != name);
-
-    let removes = vec![store.component_path(name)];
-    store.commit_with_graph(&lock, vec![], removes, &mut state)?;
+    store.remove_component(&lock, &mut state, name)?;
     println!("Removed component `{name}`");
     Ok(())
 }
 
 pub fn remove_connection(cwd: &Path, from: &str, to: &str) -> Result<()> {
     let (store, lock, mut state) = open_store_mut(cwd)?;
-
-    let existed = state
-        .graph_index
-        .edges
-        .iter()
-        .any(|e| e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo);
-    if !existed {
-        return Err(Error::ConnectionNotFound {
-            from: from.into(),
-            to: to.into(),
-        });
-    }
-
-    state
-        .graph_index
-        .edges
-        .retain(|e| !(e.from == from && e.to == to && e.kind == EdgeKind::ConnectsTo));
-
-    store.commit_with_graph(&lock, vec![], vec![], &mut state)?;
+    store.remove_connection(&lock, &mut state, from, to)?;
     println!("Disconnected `{from}` → `{to}`");
     Ok(())
 }
@@ -237,7 +53,7 @@ mod tests {
     use super::*;
     use crate::commands::{check, decide, init};
     use crate::store::Store;
-    use crate::store::schema::EdgeKind;
+    use crate::store::schema::{EdgeKind, NodeKind};
     use tempfile::TempDir;
 
     // ── add component ────────────────────────────────────────────────────

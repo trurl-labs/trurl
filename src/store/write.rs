@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,7 @@ use crate::{Error, Result};
 use super::graph::Severity;
 use super::schema::{
     Component, ComponentFile, Decision, DecisionFile, EdgeEntry, EdgeKind, GraphIndex, NodeEntry,
-    NodeKind,
+    NodeKind, Pattern, PatternFile,
 };
 use super::state::{
     ProjectState, is_reserved_node_name, is_valid_kebab_case, slugify, unique_decision_stem,
@@ -69,6 +70,20 @@ pub struct AmendDecisionParams<'a> {
     pub choice: Option<&'a str>,
     pub reason: Option<&'a str>,
     pub tags: Option<&'a [String]>,
+}
+
+// ── RecordPatternParams ─────────────────────────────────────────────
+
+/// Parameters for [`Store::record_pattern`].
+///
+/// If `components` is empty, the method infers applies‐to components
+/// from the decisions' owning components (excluding `"project"`).
+pub struct RecordPatternParams<'a> {
+    pub name: &'a str,
+    pub description: &'a str,
+    pub decisions: &'a [String],
+    pub components: &'a [String],
+    pub tags: &'a [String],
 }
 
 impl Store {
@@ -727,6 +742,233 @@ impl Store {
         }
 
         Ok(())
+    }
+
+    // ── Rename component (shared write path) ────────────────────────────
+
+    /// Rename a component, updating all references (decisions, graph
+    /// index nodes, graph index edges) atomically.
+    ///
+    /// Validates the new name, uniqueness, and cross-type collisions.
+    /// On failure, `state` is rolled back to its pre-call condition.
+    pub fn rename_component(
+        &self,
+        lock: &StoreLock,
+        state: &mut ProjectState,
+        old: &str,
+        new: &str,
+    ) -> Result<()> {
+        if !is_valid_kebab_case(new) {
+            return Err(Error::InvalidName(new.into()));
+        }
+        if is_reserved_node_name(new) {
+            return Err(Error::ReservedName(new.into()));
+        }
+        if !state.components.contains_key(old) {
+            return Err(Error::ComponentNotFound(old.into()));
+        }
+        if state.components.contains_key(new) {
+            return Err(Error::ComponentExists(new.into()));
+        }
+        if state.is_node_name_taken(new) {
+            return Err(Error::Validation(format!(
+                "name `{new}` is already used by an existing decision or pattern"
+            )));
+        }
+
+        // Snapshot graph_index for rollback — rename touches nodes and
+        // edges in-place, making selective undo error-prone. The index
+        // is small (hundreds of entries), so a full clone is cheap
+        // insurance for a once-per-invocation CLI operation.
+        let old_graph_index = state.graph_index.clone();
+
+        let affected_decisions: Vec<String> = state
+            .decisions
+            .iter()
+            .filter(|(_, dec)| dec.decision.component == old)
+            .map(|(dname, _)| dname.clone())
+            .collect();
+
+        // Apply in-memory mutations.
+        let mut renamed = state
+            .components
+            .remove(old)
+            .ok_or_else(|| Error::ComponentNotFound(old.into()))?;
+        renamed.component.name = new.into();
+        state.components.insert(new.into(), renamed);
+
+        for dec in state.decisions.values_mut() {
+            if dec.decision.component == old {
+                dec.decision.component = new.into();
+            }
+        }
+
+        for node in &mut state.graph_index.nodes {
+            if node.name == old {
+                node.name = new.into();
+            }
+        }
+        for edge in &mut state.graph_index.edges {
+            if edge.from == old {
+                edge.from = new.into();
+            }
+            if edge.to == old {
+                edge.to = new.into();
+            }
+        }
+
+        // Prepare writes and update hashes.
+        let mut writes = Vec::new();
+
+        let comp_write = self.prepare_write(&self.component_path(new), &state.components[new])?;
+        if let Some(node) = state.graph_index.nodes.iter_mut().find(|n| n.name == new) {
+            node.hash = comp_write.content_hash();
+        }
+        writes.push(comp_write);
+
+        for dname in &affected_decisions {
+            let dec_write =
+                self.prepare_write(&self.decision_path(dname), &state.decisions[dname.as_str()])?;
+            if let Some(node) = state
+                .graph_index
+                .nodes
+                .iter_mut()
+                .find(|n| n.name == *dname)
+            {
+                node.hash = dec_write.content_hash();
+            }
+            writes.push(dec_write);
+        }
+
+        let removes = vec![self.component_path(old)];
+
+        if let Err(e) = self.commit_with_graph(lock, writes, removes, state) {
+            // Rollback: revert component rename.
+            if let Some(mut c) = state.components.remove(new) {
+                c.component.name = old.into();
+                state.components.insert(old.into(), c);
+            }
+            // Revert decision component fields.
+            for dec in state.decisions.values_mut() {
+                if dec.decision.component == new {
+                    dec.decision.component = old.into();
+                }
+            }
+            // Revert graph_index entirely (node names + edge refs + hashes).
+            state.graph_index = old_graph_index;
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
+    // ── Record pattern (shared write path) ──────────────────────────────
+
+    /// Record a new pattern to disk with full graph validation and
+    /// rollback.
+    ///
+    /// Validates that all referenced decisions exist, that the derived
+    /// slug is unique, and that ≥ 2 decisions are referenced. If
+    /// `params.components` is empty, applies‐to components are inferred
+    /// from the decisions' owning components (excluding `"project"`).
+    ///
+    /// On success, `state` is updated in-place and the pattern slug
+    /// (derived filename stem) is returned. On failure, `state` is
+    /// rolled back.
+    pub fn record_pattern(
+        &self,
+        lock: &StoreLock,
+        state: &mut ProjectState,
+        params: RecordPatternParams<'_>,
+    ) -> Result<String> {
+        if params.decisions.len() < 2 {
+            return Err(Error::Validation(
+                "a pattern must reference at least 2 decisions".into(),
+            ));
+        }
+
+        for dname in params.decisions {
+            if !state.decisions.contains_key(dname.as_str()) {
+                return Err(Error::DecisionNotFound(dname.clone()));
+            }
+        }
+
+        // Resolve component list: explicit or inferred from decisions.
+        let components: Vec<String> = if params.components.is_empty() {
+            let mut inferred: HashSet<String> = HashSet::new();
+            for dname in params.decisions {
+                if let Some(dec) = state.decisions.get(dname.as_str()) {
+                    let comp = &dec.decision.component;
+                    if comp != "project" {
+                        inferred.insert(comp.clone());
+                    }
+                }
+            }
+            inferred.into_iter().collect()
+        } else {
+            for cname in params.components {
+                if !state.components.contains_key(cname.as_str()) {
+                    return Err(Error::ComponentNotFound(cname.clone()));
+                }
+            }
+            params.components.to_vec()
+        };
+
+        let slug = slugify(params.name);
+
+        if is_reserved_node_name(&slug) {
+            return Err(Error::ReservedName(slug));
+        }
+        if state.is_node_name_taken(&slug) {
+            return Err(Error::Validation(format!(
+                "name `{slug}` is already used by an existing node"
+            )));
+        }
+
+        let pattern = PatternFile {
+            pattern: Pattern {
+                name: params.name.into(),
+                description: params.description.into(),
+            },
+        };
+
+        let write = self.prepare_write(&self.pattern_path(&slug), &pattern)?;
+        let hash = write.content_hash();
+
+        let checkpoint = state.graph_checkpoint();
+
+        state.graph_index.nodes.push(NodeEntry {
+            name: slug.clone(),
+            kind: NodeKind::Pattern,
+            tags: params.tags.to_vec(),
+            hash,
+        });
+
+        for dname in params.decisions {
+            state.graph_index.edges.push(EdgeEntry {
+                from: slug.clone(),
+                to: dname.clone(),
+                kind: EdgeKind::MemberOf,
+            });
+        }
+
+        for cname in &components {
+            state.graph_index.edges.push(EdgeEntry {
+                from: slug.clone(),
+                to: cname.clone(),
+                kind: EdgeKind::AppliesTo,
+            });
+        }
+
+        state.patterns.insert(slug.clone(), pattern);
+
+        if let Err(e) = self.commit_with_graph(lock, vec![write], vec![], state) {
+            state.patterns.remove(&slug);
+            state.rollback_graph(checkpoint);
+            return Err(e);
+        }
+
+        Ok(slug)
     }
 
     // ── Crash recovery ───────────────────────────────────────────────────
