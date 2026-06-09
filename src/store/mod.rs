@@ -50,7 +50,7 @@ pub(crate) fn hash_bytes(data: &[u8]) -> String {
 
 // ── Store ────────────────────────────────────────────────────────────────────
 
-/// Handle to a `.trurl/` directory.
+/// Handle to a `.trurlic/` directory.
 /// Read methods work without locking. Write methods require a [`StoreLock`]
 /// passed as a proof parameter.
 #[derive(Debug)]
@@ -127,7 +127,7 @@ impl Store {
     /// Verify that `path` is inside the store root directory.
     /// Defense-in-depth: all store paths are derived from `self.root`, so
     /// this check should never fire in correct code. It guards against
-    /// programming errors that would write or delete files outside `.trurl/`.
+    /// programming errors that would write or delete files outside `.trurlic/`.
     fn verify_path(&self, path: &Path) -> Result<()> {
         // Reject parent-directory components before the prefix check.
         // `starts_with` on non-canonicalized paths does not prevent
@@ -152,7 +152,7 @@ impl Store {
 
     // ── Locking ──────────────────────────────────────────────────────────
 
-    /// Acquire an exclusive advisory lock on `.trurl/`.
+    /// Acquire an exclusive advisory lock on `.trurlic/`.
     /// Times out after 5 seconds. The lock is released when the returned
     /// [`StoreLock`] is dropped.
     pub fn lock(&self) -> Result<StoreLock> {
@@ -186,7 +186,7 @@ impl Store {
 
                         let detail = match holder_pid {
                             Some(pid) => format!("possibly held by PID {pid}"),
-                            None => "another trurl process may be running".into(),
+                            None => "another trurlic process may be running".into(),
                         };
                         return Err(Error::LockTimeout {
                             timeout_secs: LOCK_TIMEOUT.as_secs(),
@@ -442,17 +442,17 @@ impl Store {
 
     pub fn check_version(&self) -> Result<()> {
         let project = self.read_project()?;
-        let stored = &project.trurl_version;
+        let stored = &project.trurlic_version;
         if stored == FORMAT_VERSION {
             return Ok(());
         }
         match compare_versions(stored, FORMAT_VERSION) {
             Ordering::Greater => Err(Error::Validation(format!(
-                ".trurl/ format version `{stored}` is newer than this CLI \
-                 (expected `{FORMAT_VERSION}`). Please upgrade trurl."
+                ".trurlic/ format version `{stored}` is newer than this CLI \
+                 (expected `{FORMAT_VERSION}`). Please upgrade trurlic."
             ))),
             _ => Err(Error::Validation(format!(
-                ".trurl/ format version `{stored}` is older than this CLI \
+                ".trurlic/ format version `{stored}` is older than this CLI \
                  (expected `{FORMAT_VERSION}`). A format migration may be needed."
             ))),
         }
@@ -462,9 +462,9 @@ impl Store {
 
     /// Compare stored `graph.toml` hashes against actual file content.
     ///
-    /// Reports mismatches as warnings — files edited outside Trurl, bitrot,
+    /// Reports mismatches as warnings — files edited outside Trurlic, bitrot,
     /// or interrupted writes that were not yet reconciled. This runs
-    /// **before** `load_state` (which silently reconciles), so `trurl check`
+    /// **before** `load_state` (which silently reconciles), so `trurlic check`
     /// can surface discrepancies the user would otherwise never see.
     pub fn verify_hashes(&self) -> Result<Vec<graph::Issue>> {
         let graph_path = self.graph_path();
@@ -565,7 +565,7 @@ pub(crate) mod testing {
         fs::create_dir_all(root.join(STATE_DIR)).unwrap();
 
         let project = ProjectFile {
-            trurl_version: version.into(),
+            trurlic_version: version.into(),
             project: Project {
                 name: "test-project".into(),
                 description: "A test project".into(),
@@ -623,7 +623,7 @@ pub(crate) mod testing {
         use crate::store::schema::FORMAT_VERSION;
         super::state::ProjectState::new(
             ProjectFile {
-                trurl_version: FORMAT_VERSION.into(),
+                trurlic_version: FORMAT_VERSION.into(),
                 project: Project {
                     name: "test".into(),
                     description: String::new(),
@@ -787,7 +787,7 @@ pub(crate) mod testing {
 
         super::state::ProjectState::new(
             ProjectFile {
-                trurl_version: FORMAT_VERSION.into(),
+                trurlic_version: FORMAT_VERSION.into(),
                 project: Project {
                     name: "test-project".into(),
                     description: "A test project".into(),

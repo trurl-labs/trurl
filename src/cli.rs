@@ -4,14 +4,14 @@ use crate::{Result, commands};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "trurl",
+    name = "trurlic",
     version,
     propagate_version = true,
     disable_help_subcommand = true,
     about = "Structured architectural decisions that constrain AI code generation.",
-    long_about = "Trurl captures architectural decisions and serves them to AI coding agents\n\
+    long_about = "Trurlic captures architectural decisions and serves them to AI coding agents\n\
                   via MCP.\n\n\
-                  Start with `trurl init`, then `trurl add component <name>`."
+                  Start with `trurlic init`, then `trurlic add component <name>`."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -20,7 +20,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Initialize a new `.trurl/` directory in the current project.
+    /// Initialize a new `.trurlic/` directory in the current project.
     Init,
 
     /// Add a component or connection.
@@ -37,7 +37,7 @@ pub enum Command {
 
     /// Start a Socratic design conversation for a component.
     Design {
-        /// Component to design (must already exist via `trurl add component`).
+        /// Component to design (must already exist via `trurlic add component`).
         component: String,
 
         /// Resume a previously interrupted design session.
@@ -105,7 +105,7 @@ pub enum Command {
     /// Show project status: component count, decision count, issues.
     Status,
 
-    /// Validate `.trurl/` internal consistency.
+    /// Validate `.trurlic/` internal consistency.
     Check {
         /// Force-rebuild graph.toml from node files (nuclear recovery).
         /// Non-inferable edges (ConnectsTo, DependsOn, etc.) will be lost.

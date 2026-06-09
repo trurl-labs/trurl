@@ -10,7 +10,7 @@ use crate::store::{
 };
 use crate::{Error, Result};
 
-/// Create a new `.trurl/` directory in `cwd`.
+/// Create a new `.trurlic/` directory in `cwd`.
 pub fn init(cwd: &Path) -> Result<()> {
     let root = cwd.join(STORE_DIR);
     if root.exists() {
@@ -30,7 +30,7 @@ pub fn init(cwd: &Path) -> Result<()> {
         .to_string();
 
     let project = ProjectFile {
-        trurl_version: FORMAT_VERSION.into(),
+        trurlic_version: FORMAT_VERSION.into(),
         project: Project {
             name,
             description: String::new(),
@@ -59,13 +59,13 @@ pub fn init(cwd: &Path) -> Result<()> {
     drop(lock);
 
     append_gitignore(cwd)?;
-    println!("Initialized .trurl/");
+    println!("Initialized .trurlic/");
     Ok(())
 }
 
 fn append_gitignore(cwd: &Path) -> Result<()> {
     let path = cwd.join(".gitignore");
-    let entry = ".trurl/.state/";
+    let entry = ".trurlic/.state/";
 
     if path.exists() {
         let content = fs::read_to_string(&path)?;
@@ -112,7 +112,7 @@ mod tests {
 
         let content = fs::read_to_string(tmp.path().join(STORE_DIR).join("project.toml")).unwrap();
         let project: ProjectFile = toml::from_str(&content).unwrap();
-        assert_eq!(project.trurl_version, FORMAT_VERSION);
+        assert_eq!(project.trurlic_version, FORMAT_VERSION);
     }
 
     #[test]
@@ -143,7 +143,7 @@ mod tests {
         init(tmp.path()).unwrap();
 
         let content = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
-        assert!(content.contains(".trurl/.state/"));
+        assert!(content.contains(".trurlic/.state/"));
     }
 
     #[test]
@@ -154,7 +154,7 @@ mod tests {
 
         let content = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
         assert!(content.starts_with("/target/\n"));
-        assert!(content.contains(".trurl/.state/"));
+        assert!(content.contains(".trurlic/.state/"));
     }
 
     #[test]
@@ -164,16 +164,16 @@ mod tests {
         init(tmp.path()).unwrap();
 
         let content = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
-        assert!(content.contains("/target/\n.trurl/.state/\n"));
+        assert!(content.contains("/target/\n.trurlic/.state/\n"));
     }
 
     #[test]
     fn init_does_not_duplicate_gitignore_entry() {
         let tmp = TempDir::new().unwrap();
-        fs::write(tmp.path().join(".gitignore"), ".trurl/.state/\n").unwrap();
+        fs::write(tmp.path().join(".gitignore"), ".trurlic/.state/\n").unwrap();
         init(tmp.path()).unwrap();
 
         let content = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
-        assert_eq!(content.matches(".trurl/.state/").count(), 1);
+        assert_eq!(content.matches(".trurlic/.state/").count(), 1);
     }
 }

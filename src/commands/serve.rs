@@ -14,11 +14,13 @@ pub fn serve(cwd: &Path) -> Result<()> {
         .filter(|i| i.severity == crate::store::graph::Severity::Error)
         .count();
     if error_count > 0 {
-        eprintln!("warning: .trurl/ has {error_count} consistency issue(s) — run `trurl check`");
+        eprintln!(
+            "warning: .trurlic/ has {error_count} consistency issue(s) — run `trurlic check`"
+        );
     }
 
     eprintln!(
-        "trurl: serving {} ({} components, {} decisions, {} patterns)",
+        "trurlic: serving {} ({} components, {} decisions, {} patterns)",
         state.project.project.name,
         state.components.len(),
         state.decisions.len(),

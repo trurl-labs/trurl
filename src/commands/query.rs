@@ -42,7 +42,7 @@ pub fn check(cwd: &Path, rebuild: bool) -> Result<()> {
     let store = discover_store(cwd)?;
 
     // Phase 1: verify hashes against the raw graph.toml before load_state
-    // reconciles them. This surfaces files edited outside Trurl.
+    // reconciles them. This surfaces files edited outside Trurlic.
     let hash_issues = store.verify_hashes()?;
 
     // Phase 2: load (which reconciles) and run structural validation.
@@ -52,7 +52,7 @@ pub fn check(cwd: &Path, rebuild: bool) -> Result<()> {
     let all_issues: Vec<_> = hash_issues.iter().chain(structural_issues.iter()).collect();
 
     if all_issues.is_empty() {
-        println!(".trurl/ is consistent");
+        println!(".trurlic/ is consistent");
         return Ok(());
     }
 
@@ -108,7 +108,7 @@ fn check_rebuild(cwd: &Path) -> Result<()> {
         .count();
 
     if issues.is_empty() {
-        println!(".trurl/ is consistent");
+        println!(".trurlic/ is consistent");
         Ok(())
     } else {
         for issue in &issues {

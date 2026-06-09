@@ -19,7 +19,7 @@ pub(crate) use crate::store::watcher::WatcherGuard;
 /// coalescing multi-file operations outweighs latency.
 const DEBOUNCE: Duration = Duration::from_millis(100);
 
-/// Spawn a file watcher that reloads `.trurl/` state into the shared
+/// Spawn a file watcher that reloads `.trurlic/` state into the shared
 /// `Arc<RwLock<ProjectState>>` on external changes.
 ///
 /// Returns a guard whose lifetime controls the watcher. Failure is
@@ -29,7 +29,7 @@ pub(crate) fn spawn(
     store_root: &std::path::Path,
     state: Arc<RwLock<ProjectState>>,
 ) -> Result<WatcherGuard, String> {
-    crate::store::watcher::spawn(store_root, DEBOUNCE, "trurl-watcher", move |new_state| {
+    crate::store::watcher::spawn(store_root, DEBOUNCE, "trurlic-watcher", move |new_state| {
         let errors = new_state
             .validate()
             .iter()
@@ -37,13 +37,13 @@ pub(crate) fn spawn(
             .count();
 
         let mut guard = state.write().unwrap_or_else(|poisoned| {
-            eprintln!("trurl: recovered from poisoned state lock");
+            eprintln!("trurlic: recovered from poisoned state lock");
             poisoned.into_inner()
         });
         *guard = new_state;
 
         if errors > 0 {
-            eprintln!("trurl: reloaded state ({errors} consistency issue(s))");
+            eprintln!("trurlic: reloaded state ({errors} consistency issue(s))");
         }
     })
 }

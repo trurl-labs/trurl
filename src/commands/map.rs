@@ -26,11 +26,11 @@ pub fn map(cwd: &Path, port: Option<u16>, no_open: bool, detach: bool) -> Result
         .filter(|i| i.severity == Severity::Error)
         .count();
     if errors > 0 {
-        eprintln!("warning: .trurl/ has {errors} consistency issue(s) — run `trurl check`");
+        eprintln!("warning: .trurlic/ has {errors} consistency issue(s) — run `trurlic check`");
     }
 
     eprintln!(
-        "trurl: map for {} ({} components, {} decisions, {} patterns)",
+        "trurlic: map for {} ({} components, {} decisions, {} patterns)",
         state.project.project.name,
         state.components.len(),
         state.decisions.len(),
@@ -48,7 +48,7 @@ pub fn map(cwd: &Path, port: Option<u16>, no_open: bool, detach: bool) -> Result
 /// Spawn the map server as a detached child process.
 ///
 /// Binds a port first to avoid TOCTOU races, then re-execs with that
-/// port pinned. The child's stderr goes to `.trurl/.state/map.log`;
+/// port pinned. The child's stderr goes to `.trurlic/.state/map.log`;
 /// the parent polls the log until the URL appears, prints it, and exits.
 fn detach_server(store: &crate::store::Store, port: Option<u16>) -> Result<()> {
     use std::fs;

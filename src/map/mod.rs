@@ -1,9 +1,9 @@
 //! Interactive map server: axum HTTP + WebSocket on `127.0.0.1`.
 //!
-//! `trurl map` starts a token-gated local server that serves the graph
+//! `trurlic map` starts a token-gated local server that serves the graph
 //! visualization and a REST API for mutations. A file watcher detects
 //! external changes (MCP writes, CLI, git) and pushes diffs over
-//! WebSocket. See `trurl-map-spec.md` for the full architecture.
+//! WebSocket. See `trurlic-map-spec.md` for the full architecture.
 
 pub(crate) mod api;
 pub(crate) mod diff;
@@ -153,14 +153,14 @@ pub(crate) async fn start(
     let listener = tokio::net::TcpListener::from_std(listener).map_err(crate::Error::Io)?;
 
     let url = format!("http://{local_addr}/?token={token}");
-    eprintln!("trurl: map → {url}");
+    eprintln!("trurlic: map → {url}");
 
     // Start file watcher.
     let _watcher_guard = spawn_watcher(map_state.clone());
 
     // Open browser.
     if !no_open && let Err(e) = opener::open(&url) {
-        eprintln!("trurl: failed to open browser: {e}");
+        eprintln!("trurlic: failed to open browser: {e}");
     }
 
     // Run until Ctrl+C.
@@ -169,13 +169,13 @@ pub(crate) async fn start(
         .await
         .map_err(crate::Error::Io)?;
 
-    eprintln!("trurl: map server stopped");
+    eprintln!("trurlic: map server stopped");
     Ok(())
 }
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
-    eprintln!("\ntrurl: shutting down...");
+    eprintln!("\ntrurlic: shutting down...");
 }
 
 // ── File watcher ───────────────────────────────────────────────────────────
@@ -185,7 +185,7 @@ async fn shutdown_signal() {
 /// cost of slightly more reloads during multi-file operations.
 const MAP_DEBOUNCE: Duration = Duration::from_millis(50);
 
-/// Spawn a file watcher that detects external `.trurl/` changes,
+/// Spawn a file watcher that detects external `.trurlic/` changes,
 /// diffs the state, and pushes events over the WebSocket broadcast
 /// channel.
 fn spawn_watcher(state: Arc<MapState>) -> Option<WatcherGuard> {
@@ -194,7 +194,7 @@ fn spawn_watcher(state: Arc<MapState>) -> Option<WatcherGuard> {
     match crate::store::watcher::spawn(
         &store_root,
         MAP_DEBOUNCE,
-        "trurl-map-watcher",
+        "trurlic-map-watcher",
         move |new_state| {
             let events = {
                 let old = state.read_project_state();
@@ -210,11 +210,11 @@ fn spawn_watcher(state: Arc<MapState>) -> Option<WatcherGuard> {
         },
     ) {
         Ok(guard) => {
-            eprintln!("trurl: file watcher active");
+            eprintln!("trurlic: file watcher active");
             Some(guard)
         }
         Err(e) => {
-            eprintln!("trurl: file watcher unavailable: {e}");
+            eprintln!("trurlic: file watcher unavailable: {e}");
             None
         }
     }

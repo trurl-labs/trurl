@@ -115,7 +115,7 @@ pub struct ProviderConfig {
 
 // ── ConfigFile (on-disk format) ──────────────────────────────────────────────
 
-/// Deserialized `~/.config/trurl/config.toml`.
+/// Deserialized `~/.config/trurlic/config.toml`.
 /// All fields optional — an empty file is valid.
 /// ```toml
 /// default_provider = "anthropic"
@@ -188,7 +188,7 @@ pub fn resolve_provider(
 }
 
 pub fn config_file_path() -> Option<PathBuf> {
-    config_base_dir().map(|d| d.join("trurl").join("config.toml"))
+    config_base_dir().map(|d| d.join("trurlic").join("config.toml"))
 }
 
 // ── Resolution logic (pure, testable) ────────────────────────────────────────

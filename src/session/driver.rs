@@ -140,7 +140,7 @@ pub(crate) async fn run(
                 Some(text) => text,
                 None => {
                     persistence::save(store, session)?;
-                    eprintln!("Session saved. Resume with: trurl design {component} --continue");
+                    eprintln!("Session saved. Resume with: trurlic design {component} --continue");
                     return Ok(());
                 }
             };

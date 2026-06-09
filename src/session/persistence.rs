@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn session_path_rejects_traversal() {
         use crate::store::Store;
-        let store = Store::at("/tmp/fake/.trurl".into());
+        let store = Store::at("/tmp/fake/.trurlic".into());
         let err = session_path(&store, "../escape").unwrap_err();
         assert!(matches!(err, Error::InvalidName(_)));
     }
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn session_path_accepts_project() {
         use crate::store::Store;
-        let store = Store::at("/tmp/fake/.trurl".into());
+        let store = Store::at("/tmp/fake/.trurlic".into());
         let path = session_path(&store, "project").unwrap();
         assert!(path.to_string_lossy().contains("project.json"));
     }
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn session_path_accepts_kebab_case() {
         use crate::store::Store;
-        let store = Store::at("/tmp/fake/.trurl".into());
+        let store = Store::at("/tmp/fake/.trurlic".into());
         let path = session_path(&store, "rate-limiter").unwrap();
         assert!(path.to_string_lossy().contains("rate-limiter.json"));
     }

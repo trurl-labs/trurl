@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectFile {
-    pub trurl_version: String,
+    pub trurlic_version: String,
 
     pub project: Project,
 }
@@ -159,7 +159,7 @@ pub struct GraphIndex {
 
 pub const FORMAT_VERSION: &str = "0.2.0";
 
-pub const STORE_DIR: &str = ".trurl";
+pub const STORE_DIR: &str = ".trurlic";
 
 pub const COMPONENTS_DIR: &str = "components";
 
@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn project_round_trip() {
         let file = ProjectFile {
-            trurl_version: "0.2.0".into(),
+            trurlic_version: "0.2.0".into(),
             project: Project {
                 name: "my-project".into(),
                 description: "Test project".into(),

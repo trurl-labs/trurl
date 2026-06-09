@@ -144,7 +144,7 @@ pub fn build_step_prompt(
 /// Source code mandate — every step starts with this.
 fn preamble(component: &str) -> String {
     format!(
-        "You are running a Trurl design session for [{component}].\n\n\
+        "You are running a Trurlic design session for [{component}].\n\n\
          BEFORE PROCEEDING: Read the source code files for this component.\n\
          Do NOT rely on README or documentation. The source code is truth.\n\n"
     )
@@ -673,7 +673,7 @@ mod tests {
 
         ProjectState::new(
             ProjectFile {
-                trurl_version: FORMAT_VERSION.into(),
+                trurlic_version: FORMAT_VERSION.into(),
                 project: Project {
                     name: "test".into(),
                     description: String::new(),

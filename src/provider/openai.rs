@@ -82,8 +82,8 @@ impl OpenAiClient {
 
         if self.is_openrouter {
             req = req
-                .header("http-referer", "https://github.com/trurl-labs/trurl")
-                .header("x-title", "trurl");
+                .header("http-referer", "https://github.com/trurlic-labs/trurlic")
+                .header("x-title", "trurlic");
         }
 
         let response = req

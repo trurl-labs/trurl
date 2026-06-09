@@ -75,7 +75,7 @@ async fn run_design_inner(
         .count();
     if error_count > 0 {
         eprintln!(
-            "warning: .trurl/ has {error_count} consistency issue(s) — run `trurl check` for details"
+            "warning: .trurlic/ has {error_count} consistency issue(s) — run `trurlic check` for details"
         );
     }
 
@@ -104,7 +104,7 @@ async fn run_design_inner(
     .await;
     if result.is_err() {
         let _ = persistence::save(store, &session);
-        eprintln!("Session saved. Resume with: trurl design {component} --continue");
+        eprintln!("Session saved. Resume with: trurlic design {component} --continue");
     }
     result
 }

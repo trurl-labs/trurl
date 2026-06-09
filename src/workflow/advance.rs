@@ -22,10 +22,10 @@ use super::{CONCERN_FOCUS_LIMIT, STALENESS_THRESHOLD_DAYS, Step, TaskType};
 // ── Observability ─────────────────────────────────────────────────────────
 
 /// Runtime debug flag. Checked once on first call (zero-cost after init).
-/// Enable via `TRURL_DEBUG=1` environment variable.
+/// Enable via `TRURLIC_DEBUG=1` environment variable.
 fn is_debug() -> bool {
     static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *DEBUG.get_or_init(|| std::env::var_os("TRURL_DEBUG").is_some())
+    *DEBUG.get_or_init(|| std::env::var_os("TRURLIC_DEBUG").is_some())
 }
 
 // ── Public API ────────────────────────────────────────────────────────────
@@ -119,7 +119,7 @@ pub fn advance(
 
     if is_debug() {
         eprintln!(
-            "trurl: advance {component} → {} (type={}, decisions={}, coverage={}/{}, stale={}, patterns={})",
+            "trurlic: advance {component} → {} (type={}, decisions={}, coverage={}/{}, stale={}, patterns={})",
             step.as_str(),
             task_type.as_str(),
             decisions.len(),
@@ -506,7 +506,7 @@ fn advance_project(state: &ProjectState, task_type: Option<TaskType>, task: Opti
 
     if is_debug() {
         eprintln!(
-            "trurl: project → {} (type={}, decisions={}, patterns={})",
+            "trurlic: project → {} (type={}, decisions={}, patterns={})",
             step.as_str(),
             task_type.as_str(),
             decisions.len(),
@@ -806,7 +806,7 @@ mod tests {
 
         ProjectState::new(
             ProjectFile {
-                trurl_version: FORMAT_VERSION.into(),
+                trurlic_version: FORMAT_VERSION.into(),
                 project: Project {
                     name: "test".into(),
                     description: String::new(),

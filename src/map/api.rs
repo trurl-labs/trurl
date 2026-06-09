@@ -196,7 +196,7 @@ pub(crate) async fn put_layout(
 
     let root = state.store.root().to_path_buf();
     if let Err(e) = super::layout::save(&root, &snapshot) {
-        eprintln!("trurl: layout save failed: {e}");
+        eprintln!("trurlic: layout save failed: {e}");
     }
 
     Ok(Json(json!({ "layout_version": snapshot.version })))
@@ -213,7 +213,7 @@ pub(crate) async fn reset_layout(State(state): State<Arc<MapState>>) -> ApiResul
 
     let root = state.store.root().to_path_buf();
     if let Err(e) = super::layout::save(&root, &snapshot) {
-        eprintln!("trurl: layout save failed: {e}");
+        eprintln!("trurlic: layout save failed: {e}");
     }
 
     Ok(Json(json!({ "layout_version": snapshot.version })))

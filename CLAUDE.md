@@ -1,12 +1,12 @@
-## Trurl
+## Trurlic
 
-This project uses Trurl for architectural decisions. The Trurl MCP server enforces design-before-implementation.
+This project uses Trurlic for architectural decisions. The Trurlic MCP server enforces design-before-implementation.
 
 ### Workflow
 
 Before implementing any task:
 
-1. Call `advance` with the component name and task_type. (Omit task_type to let Trurl infer from graph state.)
+1. Call `advance` with the component name and task_type. (Omit task_type to let Trurlic infer from graph state.)
 2. Follow the returned `action` exactly.
 3. If the action says `get_step_prompt` — call it, follow the instructions, then call advance` again.
 4. Repeat until `ready: true`.
@@ -25,7 +25,7 @@ Before implementing any task:
 
 ### Comprehension Gates
 
-When Trurl's step prompt includes comprehension checkpoints, ask the user to articulate their understanding in their own words. The user explains — you validate. Do not explain on their behalf.
+When Trurlic's step prompt includes comprehension checkpoints, ask the user to articulate their understanding in their own words. The user explains — you validate. Do not explain on their behalf.
 
 ### Decision Recording
 

@@ -111,7 +111,7 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
             },
             {
                 "name": "validate_consistency",
-                "description": "Full graph integrity check. Same validation as `trurl check`.",
+                "description": "Full graph integrity check. Same validation as `trurlic check`.",
                 "inputSchema": { "type": "object", "properties": {} }
             },
             {

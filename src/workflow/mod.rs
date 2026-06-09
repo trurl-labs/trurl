@@ -230,7 +230,7 @@ mod integration_tests {
 
         crate::store::ProjectState::new(
             ProjectFile {
-                trurl_version: FORMAT_VERSION.into(),
+                trurlic_version: FORMAT_VERSION.into(),
                 project: Project {
                     name: "test".into(),
                     description: String::new(),

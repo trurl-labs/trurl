@@ -1,14 +1,14 @@
-# Contributing to Trurl
+# Contributing to Trurlic
 
-Trurl stores architectural decisions and serves them to AI coding agents. Contributions should maintain the same engineering standards the tool itself promotes: intentional decisions, clean code, consistency.
+Trurlic stores architectural decisions and serves them to AI coding agents. Contributions should maintain the same engineering standards the tool itself promotes: intentional decisions, clean code, consistency.
 
 ## Reporting bugs and security issues
 
 **Security vulnerabilities** — do not open a public issue. See [SECURITY.md](SECURITY.md).
 
-**Bugs** — open a GitHub issue with your Trurl version (`trurl --version`), Rust version (`rustc --version`), platform, and minimal reproduction steps.
+**Bugs** — open a GitHub issue with your Trurlic version (`trurlic --version`), Rust version (`rustc --version`), platform, and minimal reproduction steps.
 
-**Feature requests** — open an issue describing the use case before writing code. Changes to the `.trurl/` format, the MCP tool surface, or the decision schema have compatibility implications — wait for maintainer feedback.
+**Feature requests** — open an issue describing the use case before writing code. Changes to the `.trurlic/` format, the MCP tool surface, or the decision schema have compatibility implications — wait for maintainer feedback.
 
 ## Development setup
 
@@ -21,8 +21,8 @@ cargo install cargo-deny
 **First-time setup:**
 
 ```bash
-git clone https://github.com/trurl-labs/trurl.git
-cd trurl
+git clone https://github.com/trurlic-labs/trurlic.git
+cd trurlic
 make setup    # installs git hooks
 cargo build
 cargo test
@@ -68,7 +68,7 @@ cargo test -- remove_decision_allows_with_constrains_edge
 
 ## Working on the store
 
-The `.trurl/` format is the foundation. Changes to schemas or file operations require extra care:
+The `.trurlic/` format is the foundation. Changes to schemas or file operations require extra care:
 
 - All writes use `commit_with_graph` — validates the full graph before touching disk.
 - Atomic protocol: serialize → tmp file → verify round-trip → rename. `graph.toml` renamed last.
@@ -86,7 +86,7 @@ The MCP server assembles specs from stored decisions.
 
 ## Working on the conversation engine
 
-The Socratic design flow powers `trurl design`.
+The Socratic design flow powers `trurlic design`.
 
 - Each user answer writes a decision immediately — no batching. Crash-safe by design.
 - After recording a decision, `state.rebuild_graph()` must be called to keep the graph cache consistent for subsequent writes in the same session.

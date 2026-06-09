@@ -1173,7 +1173,7 @@ mod tests {
         use crate::store::schema::*;
         let state = ProjectState::new(
             ProjectFile {
-                trurl_version: FORMAT_VERSION.into(),
+                trurlic_version: FORMAT_VERSION.into(),
                 project: Project {
                     name: "empty".into(),
                     description: String::new(),

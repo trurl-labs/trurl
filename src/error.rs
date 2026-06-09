@@ -13,10 +13,10 @@ pub enum Error {
     #[error("TOML serialization error: {0}")]
     TomlWrite(#[from] toml::ser::Error),
 
-    #[error("not a trurl project (no .trurl/ found in {0} or any parent directory)")]
+    #[error("not a trurlic project (no .trurlic/ found in {0} or any parent directory)")]
     StoreNotFound(PathBuf),
 
-    #[error(".trurl/ already exists at {0}")]
+    #[error(".trurlic/ already exists at {0}")]
     StoreExists(PathBuf),
 
     #[error("could not acquire lock within {timeout_secs}s — {detail}")]

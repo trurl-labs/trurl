@@ -1,7 +1,7 @@
-//! Shared file watcher for live reload of `.trurl/` changes.
+//! Shared file watcher for live reload of `.trurlic/` changes.
 //!
 //! Both the MCP server and the map server need to detect external
-//! changes to `.trurl/` (CLI writes, manual edits, git checkout) and
+//! changes to `.trurlic/` (CLI writes, manual edits, git checkout) and
 //! reload state from disk. This module provides the shared
 //! watch → filter → debounce → reload → drain loop. Consumers supply
 //! a callback that receives the freshly loaded [`ProjectState`]; all
@@ -33,7 +33,7 @@ pub(crate) struct WatcherGuard {
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
-/// Spawn a background thread that watches `.trurl/` and calls
+/// Spawn a background thread that watches `.trurlic/` and calls
 /// `on_change` with a freshly loaded [`ProjectState`] whenever
 /// relevant files change on disk.
 ///
@@ -109,7 +109,7 @@ fn watch_loop(
         // the new state to the consumer callback.
         match store.load_state() {
             Ok(new_state) => on_change(new_state),
-            Err(e) => eprintln!("trurl: watcher reload failed: {e}"),
+            Err(e) => eprintln!("trurlic: watcher reload failed: {e}"),
         }
 
         // Drain events that arrived during reload — they reflect the state
@@ -163,56 +163,62 @@ mod tests {
 
     #[test]
     fn relevant_for_component_file() {
-        let sd = PathBuf::from("/repo/.trurl/.state");
+        let sd = PathBuf::from("/repo/.trurlic/.state");
         assert!(is_relevant(
-            &event_at(&["/repo/.trurl/components/auth.toml"]),
+            &event_at(&["/repo/.trurlic/components/auth.toml"]),
             &sd,
         ));
     }
 
     #[test]
     fn relevant_for_graph_toml() {
-        let sd = PathBuf::from("/repo/.trurl/.state");
-        assert!(is_relevant(&event_at(&["/repo/.trurl/graph.toml"]), &sd));
+        let sd = PathBuf::from("/repo/.trurlic/.state");
+        assert!(is_relevant(&event_at(&["/repo/.trurlic/graph.toml"]), &sd));
     }
 
     #[test]
     fn relevant_for_project_toml() {
-        let sd = PathBuf::from("/repo/.trurl/.state");
-        assert!(is_relevant(&event_at(&["/repo/.trurl/project.toml"]), &sd));
+        let sd = PathBuf::from("/repo/.trurlic/.state");
+        assert!(is_relevant(
+            &event_at(&["/repo/.trurlic/project.toml"]),
+            &sd
+        ));
     }
 
     #[test]
     fn irrelevant_for_lock_file() {
-        let sd = PathBuf::from("/repo/.trurl/.state");
-        assert!(!is_relevant(&event_at(&["/repo/.trurl/.state/lock"]), &sd));
+        let sd = PathBuf::from("/repo/.trurlic/.state");
+        assert!(!is_relevant(
+            &event_at(&["/repo/.trurlic/.state/lock"]),
+            &sd
+        ));
     }
 
     #[test]
     fn irrelevant_for_tmp_file() {
-        let sd = PathBuf::from("/repo/.trurl/.state");
+        let sd = PathBuf::from("/repo/.trurlic/.state");
         assert!(!is_relevant(
-            &event_at(&["/repo/.trurl/.state/tmp/0_auth.toml"]),
+            &event_at(&["/repo/.trurlic/.state/tmp/0_auth.toml"]),
             &sd,
         ));
     }
 
     #[test]
     fn irrelevant_for_session_file() {
-        let sd = PathBuf::from("/repo/.trurl/.state");
+        let sd = PathBuf::from("/repo/.trurlic/.state");
         assert!(!is_relevant(
-            &event_at(&["/repo/.trurl/.state/sessions/auth.json"]),
+            &event_at(&["/repo/.trurlic/.state/sessions/auth.json"]),
             &sd,
         ));
     }
 
     #[test]
     fn relevant_if_any_path_outside_state() {
-        let sd = PathBuf::from("/repo/.trurl/.state");
+        let sd = PathBuf::from("/repo/.trurlic/.state");
         assert!(is_relevant(
             &event_at(&[
-                "/repo/.trurl/.state/lock",
-                "/repo/.trurl/decisions/use-jwt.toml",
+                "/repo/.trurlic/.state/lock",
+                "/repo/.trurlic/decisions/use-jwt.toml",
             ]),
             &sd,
         ));
@@ -220,7 +226,7 @@ mod tests {
 
     #[test]
     fn irrelevant_for_empty_paths() {
-        let sd = PathBuf::from("/repo/.trurl/.state");
+        let sd = PathBuf::from("/repo/.trurlic/.state");
         assert!(!is_relevant(&event_at(&[]), &sd));
     }
 

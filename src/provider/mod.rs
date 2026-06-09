@@ -61,7 +61,7 @@ pub trait LlmProvider {
 
 pub fn create_provider(config: ProviderConfig) -> Result<Box<dyn LlmProvider>> {
     let client = Client::builder()
-        .user_agent(concat!("trurl/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("trurlic/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(30))
         .pool_idle_timeout(Duration::from_secs(90))
         .tcp_keepalive(Duration::from_secs(60))

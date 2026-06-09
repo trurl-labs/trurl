@@ -41,7 +41,7 @@ fn warn_on_issues(state: &ProjectState) {
         .count();
     if errors > 0 {
         eprintln!(
-            "warning: .trurl/ has {errors} consistency issue(s) — run `trurl check` for details"
+            "warning: .trurlic/ has {errors} consistency issue(s) — run `trurlic check` for details"
         );
     }
 }

@@ -12,7 +12,7 @@ use super::schema::{
 
 // ── ProjectState ─────────────────────────────────────────────────────────────
 
-/// Complete in-memory snapshot of `.trurl/`.
+/// Complete in-memory snapshot of `.trurlic/`.
 /// Keyed by filename stem (e.g. `"auth"`, `"error-strategy"`).
 pub struct ProjectState {
     pub project: ProjectFile,

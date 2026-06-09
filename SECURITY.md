@@ -13,8 +13,8 @@ Only the latest release receives security updates.
 
 **Do not open a public issue.**
 
-1. **Preferred:** use [GitHub Private Vulnerability Reporting](https://github.com/trurl-labs/trurl/security/advisories/new).
-2. **Fallback:** email security@trurl.dev with subject `[Trurl Security]`.
+1. **Preferred:** use [GitHub Private Vulnerability Reporting](https://github.com/trurlic-labs/trurlic/security/advisories/new).
+2. **Fallback:** email security@trurlic.dev with subject `[Trurlic Security]`.
 
 Include:
 - Description of the vulnerability and its impact
@@ -46,14 +46,14 @@ We consider security research conducted in good faith to be authorized and will 
 
 ### In scope
 
-- **Decision store:** `.trurl/` file operations, atomic writes, validation, file locking
-- **MCP server:** `trurl serve` — decision retrieval, response assembly, protocol handling
-- **Conversational AI:** `trurl design` — API key handling, session state management
-- **Map server:** `trurl map` — local web server, API endpoints, file system access
+- **Decision store:** `.trurlic/` file operations, atomic writes, validation, file locking
+- **MCP server:** `trurlic serve` — decision retrieval, response assembly, protocol handling
+- **Conversational AI:** `trurlic design` — API key handling, session state management
+- **Map server:** `trurlic map` — local web server, API endpoints, file system access
 - **CLI:** all subcommands — file system operations, input validation
 
 ### Out of scope
 
 - Example configurations and templates
-- Third-party AI coding agents consuming Trurl's MCP output
+- Third-party AI coding agents consuming Trurlic's MCP output
 - The content of user-authored decisions (that's your architecture, not ours)

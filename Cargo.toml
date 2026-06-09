@@ -1,18 +1,18 @@
 [package]
-name = "trurl"
+name = "trurlic"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
-repository = "https://github.com/trurl-labs/trurl"
+repository = "https://github.com/trurlic-labs/trurlic"
 description = "Structured architectural decisions that constrain AI code generation"
 
 [[bin]]
-name = "trurl"
+name = "trurlic"
 path = "src/main.rs"
 
 [lib]
-name = "trurl"
+name = "trurlic"
 path = "src/lib.rs"
 
 [dependencies]

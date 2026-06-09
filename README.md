@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./banner.png" alt="Trurl" height="100">
+  <img src="./banner.png" alt="Trurlic" height="100">
 </p>
 
 <p align="center">
@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/trurl-labs/trurl/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/trurl-labs/trurl/ci.yml?style=flat-square&label=CI" alt="CI"></a>
+  <a href="https://github.com/trurlic-labs/trurlic/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/trurlic-labs/trurlic/ci.yml?style=flat-square&label=CI" alt="CI"></a>
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/rust-1.88%2B-orange?style=flat-square" alt="Rust">
   <br>
@@ -22,26 +22,26 @@ You're shipping faster than ever, but you've stopped making the decisions that d
 
 Six months in, you can't refactor without breaking things you didn't know existed. You can't onboard anyone because there's no design to explain — just a pile of locally-correct code with no global coherence. The system works. **You just don't own it**.
 
-Trurl fixes this. You make the architectural decisions. Trurl records them, forces you to understand them, and feeds them as hard constraints to every AI-generated line of code. One decision graph, every agent follows it, nothing slips through.
+Trurlic fixes this. You make the architectural decisions. Trurlic records them, forces you to understand them, and feeds them as hard constraints to every AI-generated line of code. One decision graph, every agent follows it, nothing slips through.
 
-## What Trurl Does
+## What Trurlic Does
 
 Every architectural decision is captured in a queryable graph, understood by the programmer through forced engagement, and used to constrain AI code generation.
 
-**A file format.** `.trurl/` is like `.git/`. It lives in your repo, git-tracked. Contains a typed knowledge graph: components, decisions, patterns, and their relationships. TOML node files for human readability, a compiled edge index for fast traversal.
+**A file format.** `.trurlic/` is like `.git/`. It lives in your repo, git-tracked. Contains a typed knowledge graph: components, decisions, patterns, and their relationships. TOML node files for human readability, a compiled edge index for fast traversal.
 
-**An MCP server.** `trurl serve` starts a local MCP server that any AI coding tool queries. The coding agent calls Trurl to get context before implementing, to run design conversations when new patterns are needed, and to record decisions as they're made. You never leave your coding tool.
+**An MCP server.** `trurlic serve` starts a local MCP server that any AI coding tool queries. The coding agent calls Trurlic to get context before implementing, to run design conversations when new patterns are needed, and to record decisions as they're made. You never leave your coding tool.
 
-**A map.** `trurl map` opens an interactive visualization of the architecture graph in the browser. Components, connections, decisions, patterns — explorable, editable, always in sync with `.trurl/`.
+**A map.** `trurlic map` opens an interactive visualization of the architecture graph in the browser. Components, connections, decisions, patterns — explorable, editable, always in sync with `.trurlic/`.
 
-**A CLI.** `trurl design <component>` runs a Socratic design conversation — the AI asks you questions, you think through tradeoffs, and your answers become recorded decisions. `trurl decide` records quick decisions from the terminal. Everything local, everything under 100ms.
+**A CLI.** `trurlic design <component>` runs a Socratic design conversation — the AI asks you questions, you think through tradeoffs, and your answers become recorded decisions. `trurlic decide` records quick decisions from the terminal. Everything local, everything under 100ms.
 
-Named after Trurl from Stanisław Lem's *The Cyberiad* — the constructor who thinks deeply about what he builds before building it.
+Named after Trurl from Stanisław Lem's *The Cyberiad* — the constructor who thinks deeply about what he builds before building it. (Spelled *trurlic* to avoid conflict with curl's [`trurl`](https://github.com/curl/trurl) URL tool.)
 
 ## Install
 
 ```
-cargo install trurl
+cargo install trurlic
 ```
 
 Requires Rust 1.88+.
@@ -49,25 +49,25 @@ Requires Rust 1.88+.
 ## Quick Start
 
 ```bash
-trurl init
-trurl add component auth -d "Authentication and token management"
-trurl add component database -d "Persistence layer"
-trurl add connection auth database
+trurlic init
+trurlic add component auth -d "Authentication and token management"
+trurlic add component database -d "Persistence layer"
+trurlic add connection auth database
 
 # Record decisions directly
-trurl decide project --choice "Result<T, AppError> for all errors" --reason "Consistent error propagation"
-trurl decide auth --choice "JWT with DPoP binding" --reason "Stateless, no session store"
+trurlic decide project --choice "Result<T, AppError> for all errors" --reason "Consistent error propagation"
+trurlic decide auth --choice "JWT with DPoP binding" --reason "Stateless, no session store"
 
 # Or run a guided design conversation
-trurl design auth
+trurlic design auth
 
 # Start the MCP server for AI coding agents
-trurl serve
+trurlic serve
 ```
 
 ## MCP Integration
 
-`trurl serve` exposes these tools over MCP (stdio transport):
+`trurlic serve` exposes these tools over MCP (stdio transport):
 
 | Tool | Purpose |
 |------|---------|
@@ -89,10 +89,10 @@ trurl serve
 Add to your `CLAUDE.md` (or equivalent):
 
 ```markdown
-## Trurl
+## Trurlic
 
-This project uses Trurl for architectural decisions.
-The Trurl MCP server enforces design-before-implementation.
+This project uses Trurlic for architectural decisions.
+The Trurlic MCP server enforces design-before-implementation.
 
 ### Workflow
 
@@ -113,7 +113,7 @@ call `advance` with `intent: "learn"` or `intent: "review"`.
 
 ### Comprehension Gates
 
-When Trurl's design prompt includes comprehension checkpoints,
+When Trurlic's design prompt includes comprehension checkpoints,
 ask the user to articulate their understanding in their own words.
 The user explains — you validate. Do not explain on their behalf.
 ```
@@ -158,10 +158,10 @@ STOP. This introduces a new pattern. Ask the user to design it first.
 | `learn` | Studying existing design | All decisions with challenge questions. Probes for unrecorded decisions. No implementation. |
 | `review` | Periodic health check | Decisions sorted oldest-first. "Does this still hold?" |
 
-## The `.trurl/` Directory
+## The `.trurlic/` Directory
 
 ```
-.trurl/
+.trurlic/
 ├── project.toml                  # project metadata, format version
 ├── graph.toml                    # edge index + node hashes (git-tracked)
 ├── components/
@@ -178,7 +178,7 @@ STOP. This introduces a new pattern. Ask the user to design it first.
     └── sessions/
 ```
 
-Node files are TOML. Edges live in `graph.toml`. Files are truth, index is derived — `trurl check --rebuild` restores the index from node files.
+Node files are TOML. Edges live in `graph.toml`. Files are truth, index is derived — `trurlic check --rebuild` restores the index from node files.
 
 ### Graph Edges
 
@@ -195,24 +195,24 @@ Node files are TOML. Edges live in `graph.toml`. Files are truth, index is deriv
 ## CLI Reference
 
 ```
-trurl init                                  Create .trurl/ in current directory
-trurl add component <name> [-d <desc>]      Define a component
-trurl add connection <from> <to>            Connect two components
-trurl rename component <old> <new>          Rename, updating all references
-trurl remove component <name>               Remove (refuses if decisions reference it)
-trurl remove decision <name>                Remove (refuses if depended on)
-trurl remove connection <from> <to>         Remove a connection
-trurl decide <component> --choice "..." --reason "..."
+trurlic init                                  Create .trurlic/ in current directory
+trurlic add component <name> [-d <desc>]      Define a component
+trurlic add connection <from> <to>            Connect two components
+trurlic rename component <old> <new>          Rename, updating all references
+trurlic remove component <name>               Remove (refuses if decisions reference it)
+trurlic remove decision <name>                Remove (refuses if depended on)
+trurlic remove connection <from> <to>         Remove a connection
+trurlic decide <component> --choice "..." --reason "..."
       [--supersede <name>] [-a "..."]       Quick decision recording
-trurl design <component>                    Socratic design conversation
+trurlic design <component>                    Socratic design conversation
       [--continue] [--revisit]
       [-p anthropic|openai|openrouter]
       [-m <model>]
-trurl serve                                 Start MCP server (stdio)
-trurl map [--port <n>] [--no-open]          Open interactive map in browser
-trurl status                                Component/decision/pattern counts
-trurl check                                 Validate graph integrity
-trurl check --rebuild                       Force-rebuild graph.toml from files
+trurlic serve                                 Start MCP server (stdio)
+trurlic map [--port <n>] [--no-open]          Open interactive map in browser
+trurlic status                                Component/decision/pattern counts
+trurlic check                                 Validate graph integrity
+trurlic check --rebuild                       Force-rebuild graph.toml from files
 ```
 
 ## API Key Configuration
@@ -224,7 +224,7 @@ OPENAI_API_KEY
 OPENROUTER_API_KEY
 ```
 
-Fallback: `~/.config/trurl/config.toml` (must be `chmod 600`):
+Fallback: `~/.config/trurlic/config.toml` (must be `chmod 600`):
 ```toml
 default_provider = "anthropic"
 anthropic_api_key = "sk-ant-..."
@@ -238,11 +238,11 @@ Keys are zeroed from memory on drop and never appear in logs or error output.
 
 **Atomic writes.** Temp file, verify round-trip, rename. `graph.toml` renamed last as the commit point. Interrupted writes cleaned up on next startup.
 
-**Offline-first.** Only `trurl design` calls an LLM API. MCP, CLI, check, status — all local. The MCP server provides prompts; the coding agent's own LLM runs the conversation.
+**Offline-first.** Only `trurlic design` calls an LLM API. MCP, CLI, check, status — all local. The MCP server provides prompts; the coding agent's own LLM runs the conversation.
 
-**Files are truth.** `graph.toml` is derived and rebuildable. Hand-edit a TOML file, run `trurl check`, the graph reconciles.
+**Files are truth.** `graph.toml` is derived and rebuildable. Hand-edit a TOML file, run `trurlic check`, the graph reconciles.
 
-**Live reload.** The MCP server watches `.trurl/` for external changes and reloads automatically.
+**Live reload.** The MCP server watches `.trurlic/` for external changes and reloads automatically.
 
 ## Development
 

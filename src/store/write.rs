@@ -246,7 +246,7 @@ impl Store {
         //
         // Best-effort: renames (Phase 3) already committed the new state.
         // A remove failure here leaves an orphan file but does NOT roll back
-        // the successful writes. Crash recovery and `trurl check` will
+        // the successful writes. Crash recovery and `trurlic check` will
         // surface any resulting inconsistency.
         for path in &removes {
             if let Err(e) = fs::remove_file(path)

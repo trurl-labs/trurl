@@ -3,9 +3,9 @@
 use clap::Parser;
 
 fn main() {
-    let cli = trurl::cli::Cli::parse();
+    let cli = trurlic::cli::Cli::parse();
 
-    if let Err(e) = trurl::cli::run(cli) {
+    if let Err(e) = trurlic::cli::run(cli) {
         eprintln!("error: {e}");
         std::process::exit(1);
     }

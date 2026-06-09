@@ -23,7 +23,7 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 ///
 /// `initial_state` is wrapped in `Arc<RwLock<_>>` and shared with a
 /// background file watcher thread. The watcher detects external changes
-/// to `.trurl/` (CLI writes, manual edits, git checkout) and reloads
+/// to `.trurlic/` (CLI writes, manual edits, git checkout) and reloads
 /// state from disk. The write lock is held only for pointer swaps
 /// (microseconds) — MCP read queries acquire only a read lock and never
 /// block the watcher or other reads.
@@ -33,11 +33,11 @@ pub(crate) fn run_server(store: Store, initial_state: ProjectState) -> Result<()
     // Spawn file watcher. Non-fatal if unavailable (e.g. inotify limit).
     let _watcher = match watcher::spawn(store.root(), state.clone()) {
         Ok(guard) => {
-            eprintln!("trurl: file watcher active");
+            eprintln!("trurlic: file watcher active");
             Some(guard)
         }
         Err(e) => {
-            eprintln!("trurl: file watcher unavailable: {e}");
+            eprintln!("trurlic: file watcher unavailable: {e}");
             None
         }
     };
@@ -48,7 +48,7 @@ pub(crate) fn run_server(store: Store, initial_state: ProjectState) -> Result<()
     let mut writer = stdout.lock();
     let mut initialized = false;
 
-    eprintln!("trurl: MCP server ready");
+    eprintln!("trurlic: MCP server ready");
 
     loop {
         match protocol::read_message(&mut reader) {
@@ -56,7 +56,7 @@ pub(crate) fn run_server(store: Store, initial_state: ProjectState) -> Result<()
                 if let Some(response) = handle(&store, &state, request, &mut initialized)
                     && let Err(e) = protocol::write_response(&mut writer, &response)
                 {
-                    eprintln!("trurl: stdout write error: {e}");
+                    eprintln!("trurlic: stdout write error: {e}");
                     break;
                 }
             }
@@ -64,14 +64,14 @@ pub(crate) fn run_server(store: Store, initial_state: ProjectState) -> Result<()
             Err(e) => {
                 let response = Response::error(Value::Null, PARSE_ERROR, e.to_string());
                 if let Err(we) = protocol::write_response(&mut writer, &response) {
-                    eprintln!("trurl: stdout write error: {we}");
+                    eprintln!("trurlic: stdout write error: {we}");
                     break;
                 }
             }
         }
     }
 
-    eprintln!("trurl: MCP server stopped");
+    eprintln!("trurlic: MCP server stopped");
     Ok(())
 }
 
@@ -134,7 +134,7 @@ fn handle_initialize() -> std::result::Result<Value, (i32, String)> {
             "tools": {}
         },
         "serverInfo": {
-            "name": "trurl",
+            "name": "trurlic",
             "version": env!("CARGO_PKG_VERSION"),
         }
     }))
@@ -163,13 +163,13 @@ fn handle_tools_call(
     // supports concurrency) other read requests.
     if tools::is_write_tool(name) {
         let mut guard = state.write().unwrap_or_else(|poisoned| {
-            eprintln!("trurl: recovered from poisoned state lock");
+            eprintln!("trurlic: recovered from poisoned state lock");
             poisoned.into_inner()
         });
         Ok(tools::call_write_tool(store, &mut guard, name, arguments))
     } else {
         let guard = state.read().unwrap_or_else(|poisoned| {
-            eprintln!("trurl: recovered from poisoned state lock");
+            eprintln!("trurlic: recovered from poisoned state lock");
             poisoned.into_inner()
         });
         Ok(tools::call_read_tool(&guard, name, arguments))
@@ -224,13 +224,13 @@ mod tests {
         let result = &json["result"];
         assert_eq!(result["protocolVersion"], PROTOCOL_VERSION);
         assert!(result["capabilities"]["tools"].is_object());
-        assert_eq!(result["serverInfo"]["name"], "trurl");
+        assert_eq!(result["serverInfo"]["name"], "trurlic");
     }
 
     #[test]
     fn ping_returns_empty_object() {
         let state = empty_state();
-        let store = Store::at("/dev/null/.trurl".into());
+        let store = Store::at("/dev/null/.trurlic".into());
         let mut initialized = true;
         let req = make_request(Some(json!(2)), "ping", None);
         let resp = handle(&store, &state, req, &mut initialized).unwrap();
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn unknown_method_returns_error() {
         let state = empty_state();
-        let store = Store::at("/dev/null/.trurl".into());
+        let store = Store::at("/dev/null/.trurlic".into());
         let mut initialized = true;
         let req = make_request(Some(json!(3)), "bogus/method", None);
         let resp = handle(&store, &state, req, &mut initialized).unwrap();
@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn tools_call_missing_params_returns_error() {
         let state = empty_state();
-        let store = Store::at("/dev/null/.trurl".into());
+        let store = Store::at("/dev/null/.trurlic".into());
         let mut initialized = true;
         let req = make_request(Some(json!(4)), "tools/call", None);
         let resp = handle(&store, &state, req, &mut initialized).unwrap();
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn tools_call_missing_name_returns_error() {
         let state = empty_state();
-        let store = Store::at("/dev/null/.trurl".into());
+        let store = Store::at("/dev/null/.trurlic".into());
         let mut initialized = true;
         let req = make_request(Some(json!(5)), "tools/call", Some(json!({"arguments": {}})));
         let resp = handle(&store, &state, req, &mut initialized).unwrap();
@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn tools_list_returns_all_tools() {
         let state = empty_state();
-        let store = Store::at("/dev/null/.trurl".into());
+        let store = Store::at("/dev/null/.trurlic".into());
         let mut initialized = true;
         let req = make_request(Some(json!(6)), "tools/list", None);
         let resp = handle(&store, &state, req, &mut initialized).unwrap();
@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn tools_call_before_initialize_rejected() {
         let state = empty_state();
-        let store = Store::at("/dev/null/.trurl".into());
+        let store = Store::at("/dev/null/.trurlic".into());
         let mut initialized = false;
         let req = make_request(
             Some(json!(7)),
@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn tools_list_before_initialize_rejected() {
         let state = empty_state();
-        let store = Store::at("/dev/null/.trurl".into());
+        let store = Store::at("/dev/null/.trurlic".into());
         let mut initialized = false;
         let req = make_request(Some(json!(8)), "tools/list", None);
         let resp = handle(&store, &state, req, &mut initialized).unwrap();
@@ -318,7 +318,7 @@ mod tests {
     #[test]
     fn invalid_jsonrpc_version_rejected() {
         let state = empty_state();
-        let store = Store::at("/dev/null/.trurl".into());
+        let store = Store::at("/dev/null/.trurlic".into());
         let mut initialized = true;
         let req = Request {
             jsonrpc: "1.0".into(),
@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn ping_allowed_before_initialize() {
         let state = empty_state();
-        let store = Store::at("/dev/null/.trurl".into());
+        let store = Store::at("/dev/null/.trurlic".into());
         let mut initialized = false;
         let req = make_request(Some(json!(10)), "ping", None);
         let resp = handle(&store, &state, req, &mut initialized).unwrap();
