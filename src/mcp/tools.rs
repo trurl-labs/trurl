@@ -365,7 +365,7 @@ pub(crate) fn is_write_tool(name: &str) -> bool {
 
 /// Dispatch a read-only tool call. Requires only `&ProjectState`.
 /// Unknown tool names are handled here (they are not write tools).
-pub(crate) fn call_read_tool(state: &ProjectState, name: &str, args: &Value) -> Value {
+pub(crate) fn call_read_tool(state: &ProjectState, name: &str, args: &Value) -> ToolEnvelope {
     match name {
         "advance" => dispatch_advance(state, args),
         "get_context" => dispatch_get_context(state, args),
@@ -386,7 +386,7 @@ pub(crate) fn call_write_tool(
     state: &mut ProjectState,
     name: &str,
     args: &Value,
-) -> Value {
+) -> ToolEnvelope {
     let result = match name {
         "record_decision" => write::record_decision(store, state, args),
         "record_pattern" => write::record_pattern(store, state, args),
@@ -404,7 +404,7 @@ pub(crate) fn call_write_tool(
 
 // ── Argument dispatch helpers ───────────────────────────────────────────────
 
-fn dispatch_get_context(state: &ProjectState, args: &Value) -> Value {
+fn dispatch_get_context(state: &ProjectState, args: &Value) -> ToolEnvelope {
     let component = match args.get("component").and_then(|v| v.as_str()) {
         Some(c) => c,
         None => return tool_error("missing required parameter: component"),
@@ -420,7 +420,7 @@ fn dispatch_get_context(state: &ProjectState, args: &Value) -> Value {
     }
 }
 
-fn dispatch_check_pattern(state: &ProjectState, args: &Value) -> Value {
+fn dispatch_check_pattern(state: &ProjectState, args: &Value) -> ToolEnvelope {
     let description = match args.get("description").and_then(|v| v.as_str()) {
         Some(d) => d,
         None => return tool_error("missing required parameter: description"),
@@ -428,7 +428,7 @@ fn dispatch_check_pattern(state: &ProjectState, args: &Value) -> Value {
     tool_result(&context::check_pattern(state, description))
 }
 
-fn dispatch_get_step_prompt(state: &ProjectState, args: &Value) -> Value {
+fn dispatch_get_step_prompt(state: &ProjectState, args: &Value) -> ToolEnvelope {
     let component = match args.get("component").and_then(|v| v.as_str()) {
         Some(c) => c,
         None => return tool_error("missing required parameter: component"),
@@ -460,7 +460,7 @@ fn dispatch_get_step_prompt(state: &ProjectState, args: &Value) -> Value {
     tool_result(&result)
 }
 
-fn dispatch_advance(state: &ProjectState, args: &Value) -> Value {
+fn dispatch_advance(state: &ProjectState, args: &Value) -> ToolEnvelope {
     let component = match args.get("component").and_then(|v| v.as_str()) {
         Some(c) => c,
         None => return tool_error("missing required parameter: component"),
@@ -493,52 +493,52 @@ fn dispatch_advance(state: &ProjectState, args: &Value) -> Value {
 
 // ── MCP content envelope ────────────────────────────────────────────────────
 
-/// Typed MCP tool-response envelope. Serialized via `serde_json::to_value`
-/// instead of the `json!()` macro — field names are checked at compile
-/// time, and the struct layout matches the MCP spec exactly.
-#[derive(Serialize)]
-struct ToolEnvelope {
+/// Typed MCP tool-response envelope. Serialized directly into the JSON-RPC
+/// response by `protocol::write_success` — no intermediate `Value` tree.
+///
+/// The MCP spec requires `text` to be a JSON string containing the tool
+/// output. `tool_result` serializes the payload `Value` once into `text`;
+/// `write_success` then serializes this struct inline when writing the
+/// full JSON-RPC response. One serialization pass instead of two.
+#[derive(Debug, Serialize)]
+pub(crate) struct ToolEnvelope {
     content: [TextBlock; 1],
     /// Present and `true` for errors, omitted for success.
     #[serde(rename = "isError", skip_serializing_if = "Option::is_none")]
     is_error: Option<bool>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct TextBlock {
     r#type: &'static str,
     text: String,
 }
 
-pub(crate) fn tool_result(payload: &Value) -> Value {
+/// Wrap a JSON payload in the MCP tool content envelope.
+///
+/// The payload is serialized to a JSON string (required by the MCP protocol)
+/// and stored in `text`. The `ToolEnvelope` struct is returned directly —
+/// no `serde_json::to_value` intermediate. Callers pass it to
+/// `protocol::write_success`, which serializes the full response in one pass.
+pub(crate) fn tool_result(payload: &Value) -> ToolEnvelope {
     let text = serde_json::to_string(payload).unwrap_or_else(|_| "{}".into());
-    serde_json::to_value(ToolEnvelope {
+    ToolEnvelope {
         content: [TextBlock {
             r#type: "text",
             text,
         }],
         is_error: None,
-    })
-    .unwrap_or_else(|_| fallback_error("serialization failed"))
+    }
 }
 
-pub(crate) fn tool_error(message: &str) -> Value {
-    serde_json::to_value(ToolEnvelope {
+pub(crate) fn tool_error(message: &str) -> ToolEnvelope {
+    ToolEnvelope {
         content: [TextBlock {
             r#type: "text",
             text: message.into(),
         }],
         is_error: Some(true),
-    })
-    .unwrap_or_else(|_| fallback_error(message))
-}
-
-/// Last-resort fallback if typed serialization fails (should never happen).
-fn fallback_error(msg: &str) -> Value {
-    serde_json::json!({
-        "content": [{"type": "text", "text": msg}],
-        "isError": true
-    })
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -586,21 +586,46 @@ mod tests {
     }
 
     #[test]
-    fn tool_result_wraps_in_content_block() {
-        let payload = serde_json::json!({"status": "covered"});
-        let result = tool_result(&payload);
+    fn tool_result_wraps_payload_as_json_string() {
+        let payload = serde_json::json!({"status": "covered", "count": 3});
+        let envelope = tool_result(&payload);
 
-        let content = result["content"].as_array().unwrap();
-        assert_eq!(content.len(), 1);
-        assert_eq!(content[0]["type"], "text");
-        assert!(result.get("isError").is_none());
+        assert_eq!(envelope.content.len(), 1);
+        assert_eq!(envelope.content[0].r#type, "text");
+        assert!(envelope.is_error.is_none());
+
+        // text field contains valid JSON matching the original payload
+        let parsed: Value = serde_json::from_str(&envelope.content[0].text).unwrap();
+        assert_eq!(parsed["status"], "covered");
+        assert_eq!(parsed["count"], 3);
     }
 
     #[test]
-    fn tool_error_sets_is_error() {
-        let result = tool_error("something broke");
-        assert_eq!(result["isError"], true);
-        assert_eq!(result["content"][0]["text"], "something broke");
+    fn tool_result_serializes_to_valid_mcp_envelope() {
+        let payload = serde_json::json!({"key": "value"});
+        let envelope = tool_result(&payload);
+        let wire = serde_json::to_value(&envelope).unwrap();
+
+        assert_eq!(wire["content"][0]["type"], "text");
+        assert!(wire.get("isError").is_none());
+        // text is a JSON string, not a nested object
+        assert!(wire["content"][0]["text"].is_string());
+    }
+
+    #[test]
+    fn tool_error_sets_is_error_flag() {
+        let envelope = tool_error("something broke");
+        assert_eq!(envelope.is_error, Some(true));
+        assert_eq!(envelope.content[0].text, "something broke");
+        assert_eq!(envelope.content[0].r#type, "text");
+    }
+
+    #[test]
+    fn tool_error_serializes_to_valid_mcp_envelope() {
+        let envelope = tool_error("bad input");
+        let wire = serde_json::to_value(&envelope).unwrap();
+        assert_eq!(wire["isError"], true);
+        assert_eq!(wire["content"][0]["text"], "bad input");
     }
 
     #[test]
@@ -628,29 +653,30 @@ mod tests {
     #[test]
     fn dispatch_advance_missing_component() {
         let state = empty_state();
-        let result = call_read_tool(&state, "advance", &serde_json::json!({}));
-        assert_eq!(result["isError"], true);
+        let envelope = call_read_tool(&state, "advance", &serde_json::json!({}));
+        assert_eq!(envelope.is_error, Some(true));
     }
 
     #[test]
     fn dispatch_unknown_read_tool_returns_error() {
         let state = empty_state();
-        let result = call_read_tool(&state, "nonexistent", &serde_json::json!({}));
-        assert_eq!(result["isError"], true);
+        let envelope = call_read_tool(&state, "nonexistent", &serde_json::json!({}));
+        assert_eq!(envelope.is_error, Some(true));
+        assert!(envelope.content[0].text.contains("unknown tool"));
     }
 
     #[test]
     fn dispatch_get_context_missing_component() {
         let state = empty_state();
-        let result = call_read_tool(&state, "get_context", &serde_json::json!({}));
-        assert_eq!(result["isError"], true);
+        let envelope = call_read_tool(&state, "get_context", &serde_json::json!({}));
+        assert_eq!(envelope.is_error, Some(true));
     }
 
     #[test]
     fn dispatch_check_pattern_missing_description() {
         let state = empty_state();
-        let result = call_read_tool(&state, "check_pattern", &serde_json::json!({}));
-        assert_eq!(result["isError"], true);
+        let envelope = call_read_tool(&state, "check_pattern", &serde_json::json!({}));
+        assert_eq!(envelope.is_error, Some(true));
     }
 
     fn empty_state() -> ProjectState {

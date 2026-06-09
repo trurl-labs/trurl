@@ -45,22 +45,6 @@ where
     Value::deserialize(deserializer).map(Some)
 }
 
-#[derive(Debug, Serialize)]
-pub(crate) struct Response {
-    jsonrpc: &'static str,
-    id: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<RpcError>,
-}
-
-#[derive(Debug, Serialize)]
-struct RpcError {
-    code: i32,
-    message: String,
-}
-
 // ── Standard error codes (JSON-RPC 2.0 §5.1) ─────────────────────────────
 
 pub(crate) const PARSE_ERROR: i32 = -32700;
@@ -69,31 +53,6 @@ pub(crate) const METHOD_NOT_FOUND: i32 = -32601;
 pub(crate) const INVALID_PARAMS: i32 = -32602;
 
 const MAX_MESSAGE_BYTES: usize = 10 * 1024 * 1024;
-
-// ── Constructors ──────────────────────────────────────────────────────────
-
-impl Response {
-    pub fn success(id: Value, result: Value) -> Self {
-        Self {
-            jsonrpc: "2.0",
-            id,
-            result: Some(result),
-            error: None,
-        }
-    }
-
-    pub fn error(id: Value, code: i32, message: impl Into<String>) -> Self {
-        Self {
-            jsonrpc: "2.0",
-            id,
-            result: None,
-            error: Some(RpcError {
-                code,
-                message: message.into(),
-            }),
-        }
-    }
-}
 
 // ── Stdio transport ───────────────────────────────────────────────────────
 
@@ -163,8 +122,69 @@ fn read_line_bounded(reader: &mut impl BufRead, limit: usize) -> std::io::Result
     }
 }
 
-pub(crate) fn write_response(writer: &mut impl Write, response: &Response) -> std::io::Result<()> {
-    serde_json::to_writer(&mut *writer, response).map_err(std::io::Error::other)?;
+// ── Response writers ─────────────────────────────────────────────────────
+
+/// Write a JSON-RPC 2.0 success response, serializing `result` directly
+/// to the writer in a single pass.
+///
+/// The generic `R` allows callers to pass any `Serialize` type — a `Value`
+/// for cold-path responses (initialize, ping, tools/list) or a typed struct
+/// for hot-path tool results. Typed structs skip the intermediate `Value`
+/// allocation that `serde_json::to_value` would introduce.
+pub(crate) fn write_success<R: Serialize>(
+    writer: &mut impl Write,
+    id: &Value,
+    result: &R,
+) -> std::io::Result<()> {
+    #[derive(Serialize)]
+    struct SuccessEnvelope<'a, R: Serialize> {
+        jsonrpc: &'static str,
+        id: &'a Value,
+        result: &'a R,
+    }
+    serde_json::to_writer(
+        &mut *writer,
+        &SuccessEnvelope {
+            jsonrpc: "2.0",
+            id,
+            result,
+        },
+    )
+    .map_err(std::io::Error::other)?;
+    writer.write_all(b"\n")?;
+    writer.flush()
+}
+
+/// Write a JSON-RPC 2.0 error response.
+///
+/// Takes `message` by reference to avoid allocating a `String` for the
+/// common case where the caller has a `&str` or `&format!(…)`.
+pub(crate) fn write_error(
+    writer: &mut impl Write,
+    id: &Value,
+    code: i32,
+    message: &str,
+) -> std::io::Result<()> {
+    #[derive(Serialize)]
+    struct ErrorEnvelope<'a> {
+        jsonrpc: &'static str,
+        id: &'a Value,
+        error: RpcError<'a>,
+    }
+    #[derive(Serialize)]
+    struct RpcError<'a> {
+        code: i32,
+        message: &'a str,
+    }
+    serde_json::to_writer(
+        &mut *writer,
+        &ErrorEnvelope {
+            jsonrpc: "2.0",
+            id,
+            error: RpcError { code, message },
+        },
+    )
+    .map_err(std::io::Error::other)?;
     writer.write_all(b"\n")?;
     writer.flush()
 }
@@ -213,13 +233,13 @@ mod tests {
         assert_eq!(params["arguments"]["component"], "auth");
     }
 
-    // ── Response serialization ──────────────────────────────────────────
+    // ── write_success ───────────────────────────────────────────────────
 
     #[test]
-    fn serialize_success_response() {
-        let resp = Response::success(json!(1), json!({"ok": true}));
-        let s = serde_json::to_string(&resp).unwrap();
-        let v: Value = serde_json::from_str(&s).unwrap();
+    fn write_success_produces_valid_json_rpc() {
+        let mut buf = Vec::new();
+        write_success(&mut buf, &json!(1), &json!({"ok": true})).unwrap();
+        let v: Value = serde_json::from_slice(&buf).unwrap();
         assert_eq!(v["jsonrpc"], "2.0");
         assert_eq!(v["id"], 1);
         assert_eq!(v["result"]["ok"], true);
@@ -227,13 +247,65 @@ mod tests {
     }
 
     #[test]
-    fn serialize_error_response() {
-        let resp = Response::error(json!(2), METHOD_NOT_FOUND, "no such method");
-        let s = serde_json::to_string(&resp).unwrap();
-        let v: Value = serde_json::from_str(&s).unwrap();
+    fn write_success_single_newline_terminated_line() {
+        let mut buf = Vec::new();
+        write_success(&mut buf, &json!(42), &json!("ok")).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(output.lines().count(), 1);
+        assert!(output.ends_with('\n'));
+    }
+
+    #[test]
+    fn write_success_serializes_typed_struct_directly() {
+        #[derive(Serialize)]
+        struct Custom {
+            data: &'static str,
+        }
+        let mut buf = Vec::new();
+        write_success(&mut buf, &json!(1), &Custom { data: "hello" }).unwrap();
+        let v: Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(v["result"]["data"], "hello");
+    }
+
+    #[test]
+    fn write_success_with_null_id() {
+        let mut buf = Vec::new();
+        write_success(&mut buf, &Value::Null, &json!(true)).unwrap();
+        let v: Value = serde_json::from_slice(&buf).unwrap();
+        assert!(v["id"].is_null());
+        assert_eq!(v["result"], true);
+    }
+
+    // ── write_error ─────────────────────────────────────────────────────
+
+    #[test]
+    fn write_error_produces_valid_json_rpc() {
+        let mut buf = Vec::new();
+        write_error(&mut buf, &json!(2), METHOD_NOT_FOUND, "no such method").unwrap();
+        let v: Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(v["jsonrpc"], "2.0");
         assert_eq!(v["id"], 2);
         assert_eq!(v["error"]["code"], METHOD_NOT_FOUND);
+        assert_eq!(v["error"]["message"], "no such method");
         assert!(v.get("result").is_none());
+    }
+
+    #[test]
+    fn write_error_single_newline_terminated_line() {
+        let mut buf = Vec::new();
+        write_error(&mut buf, &json!(1), PARSE_ERROR, "bad json").unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert_eq!(output.lines().count(), 1);
+        assert!(output.ends_with('\n'));
+    }
+
+    #[test]
+    fn write_error_with_null_id() {
+        let mut buf = Vec::new();
+        write_error(&mut buf, &Value::Null, PARSE_ERROR, "malformed").unwrap();
+        let v: Value = serde_json::from_slice(&buf).unwrap();
+        assert!(v["id"].is_null());
+        assert_eq!(v["error"]["code"], PARSE_ERROR);
     }
 
     // ── read_message ────────────────────────────────────────────────────
@@ -266,20 +338,6 @@ mod tests {
         let mut reader = Cursor::new(input.as_slice());
         let err = read_message(&mut reader).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-    }
-
-    // ── write_response ──────────────────────────────────────────────────
-
-    #[test]
-    fn write_response_produces_single_line() {
-        let resp = Response::success(json!(1), json!("ok"));
-        let mut buf = Vec::new();
-        write_response(&mut buf, &resp).unwrap();
-        let output = String::from_utf8(buf).unwrap();
-        assert_eq!(output.lines().count(), 1);
-        assert!(output.ends_with('\n'));
-        let v: Value = serde_json::from_str(output.trim()).unwrap();
-        assert_eq!(v["id"], 1);
     }
 
     // ── read_line_bounded ───────────────────────────────────────────────
