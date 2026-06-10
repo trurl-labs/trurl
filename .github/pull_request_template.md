@@ -1,0 +1,26 @@
+## What
+
+<!-- One-line summary of the change. -->
+
+## Why
+
+<!-- Link to issue or describe the motivation. -->
+
+## How
+
+<!-- Key implementation decisions. Skip obvious stuff. -->
+
+## Testing
+
+- [ ] `make ci` passes locally (fmt + clippy + test + audit)
+- [ ] New behavior has tests
+- [ ] Frontend changes: `make test-frontend`
+
+## Checklist
+
+- [ ] PR description explains *why*, not just *what*
+- [ ] No new `unwrap()`/`expect()` in production code
+- [ ] Schema changes bump `FORMAT_VERSION` in `schema.rs` (if applicable)
+- [ ] MCP tool changes documented in README (if applicable)
+
+<!-- Delete sections that don't apply. -->

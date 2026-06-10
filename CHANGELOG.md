@@ -1,0 +1,230 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [Unreleased]
+
+## [0.1.0] — 2026-06-10
+
+First public release. The decision graph format and MCP tool surface may change
+in breaking ways before v1.0. Pin to a specific version for production use.
+
+### Scope
+
+Trurlic is an architecture layer for AI-assisted codebases. You record
+decisions in a typed graph, reason through them via Socratic design
+conversations, and every AI coding agent gets them as hard constraints via MCP
+before generating a single line. One decision graph, every agent follows it,
+nothing slips through.
+
+v0.1 ships the full decision lifecycle — define, decide, design, bootstrap,
+query, visualize — with MCP integration for Claude Code, Cursor, Windsurf, and
+any MCP-compatible coding agent.
+
+### Decision store
+
+- TOML-based typed graph stored in `.trurlic/`, git-tracked. Four node types:
+  components, decisions, patterns, and a project root. Five edge types:
+  `belongs_to`, `connects_to`, `depends_on`, `constrains`, and `implements`.
+- `graph.toml` compiled edge index, rebuilt deterministically from node files.
+  Human-readable, machine-queryable. Hand-edit a TOML file, run `trurlic check`,
+  the graph reconciles. `--rebuild` reconstructs the full index from node files.
+- **Atomic writes.** Serialize → write to temp file → verify round-trip
+  parse → rename into place. `graph.toml` renamed last as the commit point.
+  Interrupted writes are cleaned up on next startup.
+- **Fail-closed validation.** Every mutation validates the full graph before
+  touching disk: dangling edge detection, cycle detection, duplicate name
+  checks, schema compliance, reserved name enforcement, input size limits.
+  Invalid writes are refused with a clear error, never silently committed.
+- Cross-platform file locking (`fs2`) prevents concurrent CLI + MCP + map
+  mutations from corrupting state.
+- Parallel file I/O via `rayon` for `load_state` — node files loaded
+  concurrently, fast even for large graphs.
+- BLAKE3 content hashing with tamper detection. `trurlic check` verifies
+  every node file hash against the graph index.
+- Cascade analysis for safe removals: `remove_decision` checks for downstream
+  dependencies (`constrains`, `implements` edges) and refuses removal if other
+  nodes depend on it. `remove_component` refuses if decisions reference it.
+- Live filesystem watcher (`notify` crate) detects external changes to
+  `.trurlic/` (CLI writes, manual edits, `git checkout`) and reloads state
+  automatically. Shared by the MCP server and map.
+
+### MCP server
+
+- Twelve tools exposed over MCP (stdio transport, protocol version
+  `2024-11-05`):
+
+  | Tool | Purpose |
+  |------|---------|
+  | `advance` | Compute workflow step, return next action — the orchestration hub |
+  | `get_context` | Architectural brief: decisions, rules, related constraints |
+  | `check_pattern` | Check if an approach is already covered |
+  | `get_architecture` | Full system overview: components, connections, patterns |
+  | `get_design_prompt` | Structured prompt for design conversations |
+  | `add_component` | Add a component to the graph |
+  | `add_connection` | Connect two components |
+  | `record_decision` | Record a decision with edges, tags, and rejected alternatives |
+  | `record_pattern` | Synthesize a pattern from multiple related decisions |
+  | `update_decision` | Amend (typo fix) or supersede (substantive change) |
+  | `remove_decision` | Remove with cascade analysis |
+  | `validate_consistency` | Full graph integrity check |
+
+- `Arc<RwLock<ProjectState>>` shared with a file watcher thread. Tool calls
+  hold the write lock only for pointer swaps (microseconds). Read queries never
+  block the watcher or other reads.
+- Write tools (`record_decision`, `record_pattern`, `update_decision`,
+  `remove_decision`, `add_component`, `add_connection`) acquire an exclusive
+  file lock and run full graph validation before committing.
+- Context assembly uses authoritative language (MUST / DO NOT) — constraints,
+  not suggestions. Related decisions from connected components are included
+  transitively.
+
+### Workflow engine
+
+- Seven task types, each with a distinct step sequence:
+
+  | Type | Flow |
+  |------|------|
+  | `new_component` | DefineScope → CoverConcerns → PatternDetection → SummaryGate → Ready |
+  | `feature` | VerifyConstraints → CoverConcerns (focused) → PatternDetection → Ready |
+  | `fix` | VerifyConstraints → ImpactCheck → Ready |
+  | `learn` | AnalyzeCode → WalkDecisions → PatternDetection → Ready |
+  | `review` | WalkDecisions → DriftCheck → CoverageAudit → PatternDetection → Ready |
+  | `harden` | CoverageAudit → CoverConcerns (gaps) → PatternDetection → Ready |
+  | `bootstrap` | ScanProject → ExtractDecisions → ProjectRules → PatternDetection → Ready |
+
+- Step-by-step orchestration via `advance`: each call returns instructions for
+  exactly one step. The graph is the primary state — the state machine inspects
+  it and deduces which step comes next.
+- Concern tracking and pattern detection across decisions. Pattern
+  opportunities surfaced automatically when multiple decisions share a theme.
+- Staleness detection for decisions older than 90 days during review workflows.
+- Comprehension gates: Socratic checkpoints where the developer articulates
+  understanding before the workflow proceeds.
+- Transport-agnostic prompt generation — workflow logic lives in one module,
+  usable from MCP, CLI sessions, or future transports.
+
+### CLI
+
+- `trurlic init` — create `.trurlic/` with project metadata and directory
+  structure.
+- `trurlic add component <name> [-d <desc>]` — define a component.
+- `trurlic add connection <from> <to>` — connect two components (directional).
+- `trurlic rename component <old> <new>` — rename, updating all references
+  atomically (node files, graph index, edge targets).
+- `trurlic remove component|decision|connection` — remove with safety checks.
+- `trurlic decide <component> --choice "..." --reason "..."` — record a quick
+  decision without the full Socratic flow. Supports `--supersede` and
+  `--alternative`.
+- `trurlic design <component>` — Socratic design conversation with
+  `--continue` (resume), `--revisit` (challenge existing decisions), and
+  `--task` (focused mode). Provider selection via `-p` and model override
+  via `-m`.
+- `trurlic bootstrap [<component>]` — show bootstrap progress and agent
+  instructions for autonomous architecture extraction. Direct mode with
+  `-p`/`-m` runs the bootstrap via the LLM API.
+- `trurlic serve` — start the MCP server on stdio.
+- `trurlic map [--port N] [--no-open] [--detach]` — open the interactive graph
+  in the browser.
+- `trurlic status` — show component count, decision count, and health.
+- `trurlic check [--rebuild]` — validate `.trurlic/` internal consistency.
+  `--rebuild` reconstructs the graph index from node files.
+
+### Map (interactive visualization)
+
+- Canvas-based graph renderer with force-directed layout, level-of-detail
+  scaling, and viewport culling for large graphs.
+- WebSocket live sync — changes from the CLI, MCP server, or manual file edits
+  appear in the map instantly via the filesystem watcher.
+- Interactive features: drag nodes, hover for details, click to select,
+  multi-select, search across components and decisions, undo/redo, keyboard
+  shortcuts, command palette, breadcrumb navigation, filtering by node type.
+- Embedded frontend assets compiled into the binary via `rust-embed` — no
+  external files needed at runtime.
+- Token-based authentication for the local web server (cryptographic random
+  token via `rand`, passed as a query parameter on browser launch). Security
+  headers via `tower-http`.
+- Diff-based WebSocket updates — only changed nodes and edges are pushed,
+  not the full graph.
+
+### Design conversations
+
+- Socratic design flow powered by `trurlic design`: the LLM asks probing
+  questions, the developer thinks and answers, decisions are recorded
+  immediately after each answer — crash-safe by design.
+- Three LLM providers: Anthropic (Claude), OpenAI (GPT), and OpenRouter.
+  Auto-detection from available API keys.
+- Session persistence to `.trurlic/state/sessions/` — resume interrupted
+  sessions with `--continue`, revisit existing decisions with `--revisit`.
+- API keys sourced from environment variables (`ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `OPENROUTER_API_KEY`) or a config file at
+  `~/.config/trurlic/config.toml` (must be `chmod 600`).
+- Keys zeroed from memory on drop (`zeroize` crate) and never appear in logs,
+  error messages, or debug output. Display and Debug impls show only the last
+  4 characters.
+- SSE streaming for real-time response rendering in the terminal.
+
+### Bootstrap
+
+- Autonomous architecture extraction from existing codebases via
+  `trurlic bootstrap`. The coding agent reads the source code and records
+  components, decisions, and patterns without interactive dialogue.
+- Agent-driven workflow via MCP `advance` tool with `task_type="bootstrap"`:
+  scan the project, extract decisions per component, synthesize project rules,
+  detect patterns.
+- Direct mode (`-p anthropic`) runs the bootstrap via the LLM API without
+  a separate coding agent.
+- Single-component bootstrap: `trurlic bootstrap auth` to extract decisions
+  for one component only.
+
+### Security
+
+- `#![deny(unsafe_code)]` — no unsafe Rust anywhere in the codebase.
+- `#![deny(clippy::unwrap_used, clippy::expect_used)]` outside test code —
+  a naked `unwrap`/`expect` in production code is a compile error.
+  `panic = "abort"` in the release profile.
+- API keys wrapped in `Zeroizing<String>` at the boundary; zeroed from memory
+  on drop, never logged or displayed.
+- Config file permissions enforced: `~/.config/trurlic/config.toml` must be
+  `chmod 600` or the key is rejected.
+- Map server: cryptographic random token authentication, CORS configuration
+  via `tower-http`, security headers on all responses.
+- `cargo deny` for advisory, license, ban, and source auditing. npm supply
+  chain checks (cve-lite-cli, npm audit, lockfile-lint) for the frontend.
+- `overflow-checks = true` in the release profile.
+
+### Build & distribution
+
+- Installer script (`install.sh`) with platform detection, minisign signature
+  verification (fail-closed when `minisign` is absent, bypassable with
+  `TRURLIC_SKIP_SIGNATURE_CHECK=1`), and support for version pinning,
+  custom install directories, and target triple overrides.
+- Release binary: `strip = true`, fat LTO, `codegen-units = 1`,
+  `panic = "abort"`.
+- Cross-compilation support via `Cross.toml` for `aarch64-unknown-linux-gnu`
+  (image override to Ubuntu 20.04 for glibc ≥2.27).
+- Makefile targets: `install`, `setup`, `build`, `build-release`, `test`,
+  `check`, `fmt`, `audit`, `ci`, `clean`, plus frontend-specific variants.
+- Git hooks installed via `make setup`.
+- Conventional commit conventions with scoped types.
+
+### Testing
+
+- 609 unit tests covering the store (schemas, validation, writes, cascade,
+  graph, queries, state, watcher), MCP server (protocol, tools, context
+  assembly, writes, updates), workflow engine (advance, steps, concerns,
+  task types), session (persistence, extraction, files), CLI commands
+  (init, component, decision, design, query, bootstrap), map (diff, layout,
+  token), and providers (SSE streaming).
+- TypeScript frontend tests (force layout, camera, culling, edges, geometry,
+  level-of-detail, graph state, drag, hover, selection, search).
+- CodSpeed benchmarks for store operations (via `criterion` /
+  `codspeed-criterion-compat`).
+
+[Unreleased]: https://github.com/trurlic-labs/trurlic/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/trurlic-labs/trurlic/releases/tag/v0.1.0

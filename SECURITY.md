@@ -14,7 +14,7 @@ Only the latest release receives security updates.
 **Do not open a public issue.**
 
 1. **Preferred:** use [GitHub Private Vulnerability Reporting](https://github.com/trurlic-labs/trurlic/security/advisories/new).
-2. **Fallback:** email security@trurlic.dev with subject `[Trurlic Security]`.
+2. **Fallback:** email m2papierz@gmail.com with subject `[Trurlic Security]`.
 
 Include:
 - Description of the vulnerability and its impact

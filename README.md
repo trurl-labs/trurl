@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/rust-1.88%2B-orange?style=flat-square" alt="Rust">
   <br>
-  <a href="SECURITY.md">Report a vulnerability</a> · <a href="CONTRIBUTING.md">Contributing</a>
+  <a href="SECURITY.md">Report a vulnerability</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 ---
