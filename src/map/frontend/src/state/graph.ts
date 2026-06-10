@@ -4,6 +4,18 @@ import { Quadtree } from '../renderer/culling';
 /** Shared empty array — avoids allocation on `decisionsFor` misses. */
 const NO_DECISIONS: readonly DecisionNode[] = Object.freeze([]);
 
+/** Minimum node width (px). */
+const MIN_NODE_W = 200;
+/** Maximum node width (px). */
+const MAX_NODE_W = 320;
+/** Approximate character width at 14px system-ui (monospace). */
+const CHAR_WIDTH_ESTIMATE = 8.8;
+/** Horizontal padding inside the node box. */
+const NODE_PAD_X = 40;
+
+/** Default node height at LOD 0–1 (px). */
+const BASE_NODE_H = 60;
+
 /** Client-side graph model. */
 export class Graph {
   nodes: Map<string, RenderNode> = new Map();
@@ -35,8 +47,8 @@ export class Graph {
         kind: 'component',
         x: c.position?.x ?? 0,
         y: c.position?.y ?? 0,
-        w: 180,
-        h: 60,
+        w: nodeWidth(c.name),
+        h: BASE_NODE_H,
         pinned: c.pinned,
         description: c.description,
         decisionCount: c.decision_count,
@@ -76,7 +88,7 @@ export class Graph {
     for (const node of this.nodes.values()) {
       if (node.x === 0 && node.y === 0 && !node.pinned) {
         const angle = (2 * Math.PI * i) / Math.max(count, 1);
-        const radius = 200 + count * 20;
+        const radius = 350 + count * 45;
         node.x = Math.cos(angle) * radius;
         node.y = Math.sin(angle) * radius;
       }
@@ -137,4 +149,13 @@ export class Graph {
     const idx = this.edges.findIndex((e) => e.from === from && e.to === to && e.kind === kind);
     if (idx !== -1) this.edges.splice(idx, 1);
   }
+}
+
+/**
+ * Compute node width from the component name length.
+ * Avoids truncated labels while preventing excessively wide boxes.
+ */
+function nodeWidth(name: string): number {
+  const textWidth = name.length * CHAR_WIDTH_ESTIMATE + NODE_PAD_X;
+  return Math.max(MIN_NODE_W, Math.min(MAX_NODE_W, textWidth));
 }

@@ -10,9 +10,9 @@ export enum LOD {
 
 /**
  * Reference viewport area in world-coordinate square-units.
- * Calibrated so that the readable-density thresholds (40, 10) hold
- * at a standard 1920×1080 screen at zoom 1.0 where the world viewport
- * is approximately 2400×1400 units.
+ * Calibrated so that the density thresholds hold at a standard
+ * 1920×1080 screen at zoom 1.0 where the world viewport is
+ * approximately 2400×1400 units.
  */
 const REFERENCE_AREA = 3_360_000;
 
@@ -25,6 +25,10 @@ const REFERENCE_AREA = 3_360_000;
  * matching spec §Rendering Pipeline ("LOD thresholds are derived from
  * information density").
  *
+ * Thresholds are conservative: LOD 2 (decision cards) only activates
+ * when ≤ 3 nodes fill the viewport, keeping the default project
+ * overview clean and compact.
+ *
  * @param visibleCount  Number of nodes whose bounds intersect the viewport.
  * @param viewportWorldArea  Viewport width × height in world coordinates.
  */
@@ -33,7 +37,7 @@ export function computeLOD(visibleCount: number, viewportWorldArea: number): LOD
 
   const normalizedCount = visibleCount * (REFERENCE_AREA / viewportWorldArea);
 
-  if (normalizedCount > 40) return LOD.Overview;
-  if (normalizedCount > 10) return LOD.Component;
+  if (normalizedCount > 30) return LOD.Overview;
+  if (normalizedCount > 3) return LOD.Component;
   return LOD.Decision;
 }

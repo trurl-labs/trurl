@@ -1,57 +1,50 @@
 import { describe, it, expect } from 'vitest';
 import { LOD, computeLOD } from './lod';
 
-// Reference area calibrated to 1920×1080 at zoom 1.0 (≈ 3,360,000 world sq-units).
 const REF = 3_360_000;
 
 describe('computeLOD', () => {
-  it('returns Overview when density is high (many nodes, reference viewport)', () => {
-    expect(computeLOD(41, REF)).toBe(LOD.Overview);
-    expect(computeLOD(100, REF)).toBe(LOD.Overview);
-    expect(computeLOD(5000, REF)).toBe(LOD.Overview);
+  it('returns Decision for zero area', () => {
+    expect(computeLOD(5, 0)).toBe(LOD.Decision);
   });
 
-  it('returns Component at mid-range density', () => {
-    expect(computeLOD(11, REF)).toBe(LOD.Component);
-    expect(computeLOD(25, REF)).toBe(LOD.Component);
-    expect(computeLOD(40, REF)).toBe(LOD.Component);
+  it('returns Decision for negative area', () => {
+    expect(computeLOD(5, -100)).toBe(LOD.Decision);
   });
 
-  it('returns Decision when density is low (few nodes, reference viewport)', () => {
-    expect(computeLOD(10, REF)).toBe(LOD.Decision);
-    expect(computeLOD(5, REF)).toBe(LOD.Decision);
-    expect(computeLOD(1, REF)).toBe(LOD.Decision);
+  it('returns Overview for high density', () => {
+    // 50 nodes at reference area → normalizedCount = 50 > 30.
+    expect(computeLOD(50, REF)).toBe(LOD.Overview);
   });
 
-  it('returns Decision for zero visible nodes', () => {
-    expect(computeLOD(0, REF)).toBe(LOD.Decision);
+  it('returns Component for moderate density', () => {
+    // 15 nodes at reference area → normalizedCount = 15 > 3.
+    expect(computeLOD(15, REF)).toBe(LOD.Component);
   });
 
-  it('returns Decision for zero viewport area (degenerate)', () => {
-    expect(computeLOD(100, 0)).toBe(LOD.Decision);
-    expect(computeLOD(100, -1)).toBe(LOD.Decision);
+  it('returns Decision for low density', () => {
+    // 2 nodes at reference area → normalizedCount = 2 ≤ 3.
+    expect(computeLOD(2, REF)).toBe(LOD.Decision);
   });
 
-  // ── Density-normalization tests ────────────────────────────────────
-
-  it('shows more detail in a larger viewport with the same node count', () => {
-    // 20 nodes at reference area → Component (normalized 20).
-    expect(computeLOD(20, REF)).toBe(LOD.Component);
-    // Same 20 nodes in a viewport 3× the area → sparser (normalized ≈6.7) → Decision.
-    expect(computeLOD(20, REF * 3)).toBe(LOD.Decision);
+  it('adjusts for viewport area', () => {
+    // 5 nodes in a very small viewport = high density.
+    expect(computeLOD(5, REF / 10)).toBe(LOD.Overview);
+    // 5 nodes in a very large viewport = low density.
+    expect(computeLOD(5, REF * 10)).toBe(LOD.Decision);
   });
 
-  it('shows less detail in a smaller viewport with the same node count', () => {
-    // 30 nodes at reference area → Component (normalized 30).
+  it('boundary: exactly 30 normalized is Overview', () => {
+    // normalizedCount = 30 → should be Overview (> 30 is false, so actually Component)
+    // 30 * (REF / REF) = 30 → not > 30, so Component.
     expect(computeLOD(30, REF)).toBe(LOD.Component);
-    // Same 30 nodes in a viewport half the area → denser (normalized 60) → Overview.
-    expect(computeLOD(30, REF / 2)).toBe(LOD.Overview);
+    expect(computeLOD(31, REF)).toBe(LOD.Overview);
   });
 
-  it('sparse region at any zoom level shows full detail', () => {
-    // 3 nodes in a small viewport: normalized = 3 * (REF / (REF/10)) = 30 → Component.
-    expect(computeLOD(3, REF / 10)).toBe(LOD.Component);
-    // 3 nodes in a very large viewport: normalized = 3 * (REF / (REF*10)) = 0.3 → Decision.
-    expect(computeLOD(3, REF * 10)).toBe(LOD.Decision);
+  it('boundary: exactly 3 normalized is Decision (threshold is strict >)', () => {
+    // normalizedCount = 3 → not > 3, so Decision.
+    expect(computeLOD(3, REF)).toBe(LOD.Decision);
+    // 4 → > 3 → Component.
+    expect(computeLOD(4, REF)).toBe(LOD.Component);
   });
 });

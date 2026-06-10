@@ -3,7 +3,7 @@ import type { Graph } from '../state/graph';
 import type { RenderNode, FilterState, DecisionNode, ColorSnapshot } from '../types';
 import { LOD } from './lod';
 import type { AABB } from './culling';
-import { EDGE_DASH, edgeColor, edgeCurveCP, buildEdgePairSet } from './edges';
+import { EDGE_DASH, EDGE_OPACITY, edgeColor, edgeCurveCP, buildEdgePairSet } from './edges';
 import { convexHull, expandHull, roundedHullPath, nodeCorners } from './geometry';
 import type { HoverRenderState } from '../app/hover';
 
@@ -19,15 +19,18 @@ function snapshotColors(): ColorSnapshot {
     border: v('--border', '#2e3244'),
     text: v('--text', '#e1e4ed'),
     textDim: v('--text-dim', '#8b90a0'),
-    accent: v('--accent', '#6c8cff'),
-    accentDim: v('--accent-dim', '#3a4f8f'),
+    accent: v('--accent', '#d4882b'),
+    accentDim: v('--accent-dim', '#8b5a1b'),
     edge: v('--edge', '#3a3f52'),
     edgeDep: v('--edge-dep', '#5a7f5a'),
     edgeCon: v('--edge-con', '#8f6c3a'),
-    selectRing: v('--select', '#6c8cff'),
+    edgeSup: v('--edge-sup', '#7a5a7a'),
+    selectRing: v('--select', '#d4882b'),
     badge: v('--badge', '#4a5068'),
     minimap: v('--minimap-bg', '#13151d'),
-    minimapVp: v('--minimap-vp', 'rgba(108,140,255,0.25)'),
+    minimapVp: v('--minimap-vp', 'rgba(212,136,43,0.25)'),
+    gridDot: v('--grid-dot', '#1e2130'),
+    shadow: v('--shadow', 'rgba(0,0,0,0.35)'),
   };
 }
 
@@ -142,6 +145,11 @@ export class Renderer {
       hw: vp.w / 2,
       hh: vp.h / 2,
     };
+
+    // Dot grid — fades out below zoom 0.25 for performance and clarity.
+    if (cam.zoom > 0.15) {
+      this.drawGrid(vp, c);
+    }
 
     const visibleNames = new Set(graph.quadtree.queryViewport(vpAABB));
 
@@ -290,7 +298,8 @@ export class Renderer {
         fh.edge.to === e.to &&
         fh.edge.kind === e.kind;
 
-      ctx.globalAlpha = dimmed ? 0.15 : 1;
+      const kindOpacity = EDGE_OPACITY[e.kind] ?? 0.6;
+      ctx.globalAlpha = dimmed ? 0.15 : kindOpacity;
 
       const color = edgeColor(e.kind, c);
       ctx.strokeStyle = isHovered ? c.accent : color;
@@ -395,6 +404,9 @@ export class Renderer {
 
     if (selected) this.drawSelectRing(node);
 
+    // Drop shadow.
+    this.drawShadow(node);
+
     ctx.fillStyle = selected ? c.surfaceHi : c.surface;
     this.roundRect(node.x - node.w / 2, node.y - node.h / 2, node.w, node.h, 8);
     ctx.fill();
@@ -403,7 +415,7 @@ export class Renderer {
     this.drawNodeBorder(node);
 
     const fontSize = Math.max(12, 14 / Math.max(cam.zoom, 0.5));
-    ctx.font = `600 ${fontSize}px system-ui, -apple-system, sans-serif`;
+    ctx.font = `600 ${fontSize}px ui-monospace, 'SF Mono', 'Cascadia Code', 'Consolas', monospace`;
     ctx.fillStyle = c.text;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -445,6 +457,9 @@ export class Renderer {
       this.drawSelectRing(node, expandedH);
     }
 
+    // Drop shadow.
+    this.drawShadow(node, expandedH);
+
     ctx.fillStyle = selected ? c.surfaceHi : c.surface;
     this.roundRect(node.x - node.w / 2, node.y - expandedH / 2, node.w, expandedH, 8);
     ctx.fill();
@@ -456,7 +471,7 @@ export class Renderer {
     let cursorY = node.y - expandedH / 2 + fontSize + 6 / cam.zoom;
 
     // Name.
-    ctx.font = `600 ${fontSize}px system-ui, -apple-system, sans-serif`;
+    ctx.font = `600 ${fontSize}px ui-monospace, 'SF Mono', 'Cascadia Code', 'Consolas', monospace`;
     ctx.fillStyle = c.text;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -515,6 +530,9 @@ export class Renderer {
       this.drawSelectRing(node, expandedH);
     }
 
+    // Drop shadow.
+    this.drawShadow(node, expandedH);
+
     ctx.fillStyle = selected ? c.surfaceHi : c.surface;
     this.roundRect(node.x - node.w / 2, node.y - expandedH / 2, node.w, expandedH, 8);
     ctx.fill();
@@ -526,7 +544,7 @@ export class Renderer {
     let cursorY = node.y - expandedH / 2 + fontSize + 6 / cam.zoom;
 
     // Name.
-    ctx.font = `600 ${fontSize}px system-ui, -apple-system, sans-serif`;
+    ctx.font = `600 ${fontSize}px ui-monospace, 'SF Mono', 'Cascadia Code', 'Consolas', monospace`;
     ctx.fillStyle = c.text;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -733,6 +751,54 @@ export class Renderer {
     miniCtx.strokeRect(vx, vy, vw, vh);
     miniCtx.fillStyle = c.minimapVp;
     miniCtx.fillRect(vx, vy, vw, vh);
+  }
+
+  // ── Dot grid ──────────────────────────────────────────────────────────
+
+  /** Subtle dot grid for spatial grounding. Drawn in camera space. */
+  private drawGrid(vp: { x: number; y: number; w: number; h: number }, c: ColorSnapshot): void {
+    const { ctx, cam, dpr } = this;
+    const spacing = 60;
+
+    // Fade grid when zoomed out.
+    const alpha = Math.min(1, (cam.zoom - 0.15) / 0.35);
+    if (alpha <= 0) return;
+
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.translate(cam.screenW / 2, cam.screenH / 2);
+    ctx.scale(cam.zoom, cam.zoom);
+    ctx.translate(-cam.cx, -cam.cy);
+
+    ctx.fillStyle = c.gridDot;
+    ctx.globalAlpha = alpha;
+
+    const startX = Math.floor(vp.x / spacing) * spacing;
+    const startY = Math.floor(vp.y / spacing) * spacing;
+    const endX = vp.x + vp.w;
+    const endY = vp.y + vp.h;
+    const dotSize = 1.2 / cam.zoom;
+
+    for (let x = startX; x <= endX; x += spacing) {
+      for (let y = startY; y <= endY; y += spacing) {
+        ctx.fillRect(x - dotSize / 2, y - dotSize / 2, dotSize, dotSize);
+      }
+    }
+
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // ── Drop shadow ─────────────────────────────────────────────────────
+
+  /** Soft shadow behind node cards for depth. */
+  private drawShadow(node: RenderNode, overrideH?: number): void {
+    const { ctx, cam, c } = this;
+    const h = overrideH ?? node.h;
+    const offset = 3 / cam.zoom;
+    ctx.fillStyle = c.shadow;
+    this.roundRect(node.x - node.w / 2 + offset, node.y - h / 2 + offset, node.w, h, 8);
+    ctx.fill();
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────

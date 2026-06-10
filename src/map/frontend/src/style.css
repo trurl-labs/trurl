@@ -14,17 +14,20 @@
   --border: #2e3244;
   --text: #e1e4ed;
   --text-dim: #8b90a0;
-  --accent: #6c8cff;
-  --accent-dim: #3a4f8f;
+  --accent: #d4882b;
+  --accent-dim: #8b5a1b;
   --edge: #3a3f52;
-  --select: #6c8cff;
+  --select: #d4882b;
   --badge: #4a5068;
   --minimap-bg: #13151d;
-  --minimap-vp: rgba(108, 140, 255, 0.25);
+  --minimap-vp: rgba(212, 136, 43, 0.25);
   --panel-bg: #14161e;
   --panel-border: #2e3244;
   --edge-dep: #5a7f5a;
   --edge-con: #8f6c3a;
+  --edge-sup: #7a5a7a;
+  --grid-dot: #1e2130;
+  --shadow: rgba(0, 0, 0, 0.35);
   color-scheme: dark;
 }
 
@@ -36,17 +39,20 @@
     --border: #d0d4de;
     --text: #1a1d27;
     --text-dim: #6b7080;
-    --accent: #4466dd;
-    --accent-dim: #8899dd;
+    --accent: #b06e1e;
+    --accent-dim: #d4a060;
     --edge: #c0c4d0;
-    --select: #4466dd;
+    --select: #b06e1e;
     --badge: #d0d4de;
     --minimap-bg: #eaecf0;
-    --minimap-vp: rgba(68, 102, 221, 0.2);
+    --minimap-vp: rgba(176, 110, 30, 0.2);
     --panel-bg: #ffffff;
     --panel-border: #d0d4de;
     --edge-dep: #4a8a4a;
     --edge-con: #a07830;
+    --edge-sup: #8a6a8a;
+    --grid-dot: #e0e2e8;
+    --shadow: rgba(0, 0, 0, 0.1);
     color-scheme: light;
   }
 }
@@ -103,6 +109,7 @@ body {
   font-size: 18px;
   font-weight: 600;
   margin-bottom: 4px;
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
 }
 #panel h3 {
   font-size: 13px;

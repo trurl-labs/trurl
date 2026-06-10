@@ -228,4 +228,38 @@ describe('Graph', () => {
       expect(g.allTags()).toEqual(['alpha', 'beta', 'gamma']);
     });
   });
+
+  describe('dynamic node width', () => {
+    it('assigns wider boxes to longer component names', () => {
+      const g = new Graph();
+      g.loadSnapshot(
+        makeSnapshot({
+          components: [
+            {
+              name: 'db',
+              description: '',
+              position: null,
+              pinned: false,
+              decision_count: 0,
+              pattern_count: 0,
+            },
+            {
+              name: 'authentication-service',
+              description: '',
+              position: null,
+              pinned: false,
+              decision_count: 0,
+              pattern_count: 0,
+            },
+          ],
+        }),
+      );
+      const short = g.nodes.get('db')!;
+      const long = g.nodes.get('authentication-service')!;
+      expect(long.w).toBeGreaterThan(short.w);
+      // Both should be within min/max bounds.
+      expect(short.w).toBeGreaterThanOrEqual(200);
+      expect(long.w).toBeLessThanOrEqual(320);
+    });
+  });
 });

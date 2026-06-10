@@ -84,8 +84,6 @@ export interface Viewport {
   h: number;
 }
 
-// ── Filtering ──────────────────────────────────────────────────────────────
-
 // ── Renderer color snapshot ────────────────────────────────────────────────
 
 /**
@@ -105,10 +103,13 @@ export interface ColorSnapshot {
   edge: string;
   edgeDep: string;
   edgeCon: string;
+  edgeSup: string;
   selectRing: string;
   badge: string;
   minimap: string;
   minimapVp: string;
+  gridDot: string;
+  shadow: string;
 }
 
 // ── Filtering ──────────────────────────────────────────────────────────────
