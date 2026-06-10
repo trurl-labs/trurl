@@ -9,10 +9,39 @@
   <body>
     <canvas id="canvas"></canvas>
     <canvas id="minimap" width="360" height="240"></canvas>
+    <!-- Reconnecting indicator -->
+    <div id="ws-status" class="ws-status hidden">Reconnecting…</div>
+    <!-- Breadcrumb trail -->
+    <div id="breadcrumb" class="breadcrumb"></div>
+    <!-- Toolbar: edge toggles, tag filter, age filter, focus mode -->
+    <div id="toolbar" class="toolbar"></div>
     <!-- Search overlay -->
     <div id="search-bar" class="search-bar hidden">
-      <input id="search-input" type="text" placeholder="Search components, decisions, patterns…" autocomplete="off" spellcheck="false" />
+      <input
+        id="search-input"
+        type="text"
+        placeholder="Search components, decisions, patterns…"
+        autocomplete="off"
+        spellcheck="false"
+      />
       <div id="search-results" class="search-results"></div>
+    </div>
+    <!-- Command palette overlay -->
+    <div id="palette-backdrop" class="palette-backdrop hidden">
+      <div class="palette">
+        <input
+          id="palette-input"
+          type="text"
+          placeholder="Type a command…"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <div id="palette-results" class="palette-results"></div>
+      </div>
+    </div>
+    <!-- First-visit hint (shown once, fades after 4s) -->
+    <div id="hint-overlay" class="hint-overlay hidden">
+      Scroll to zoom · Drag to pan · Click a component to explore
     </div>
     <div id="panel"></div>
     <!-- ARIA live region: announces selected node for screen readers. -->
