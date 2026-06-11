@@ -172,17 +172,10 @@ verify_attestation() {
 # ---------------------------------------------------------------------------
 
 # Embedded public key — must match keys/release.minisign.pub in the repo.
-# IMPORTANT: Replace this placeholder after running `minisign -G`.
-TRURLIC_MINISIGN_PUBKEY="REPLACE_WITH_ACTUAL_PUBLIC_KEY"
+TRURLIC_MINISIGN_PUBKEY="RWRIH8Kh8EblJnNzGzseyluNI3vqSrLnDhkS0rR7+PWvKLAOSpwI9J1R"
 
 verify_signature() {
     local file="$1" sig_url="$2"
-
-    if [ "$TRURLIC_MINISIGN_PUBKEY" = "REPLACE_WITH_ACTUAL_PUBLIC_KEY" ]; then
-        warn "Minisign public key not configured — skipping signature verification."
-        warn "This is expected for pre-release builds."
-        return 0
-    fi
 
     if [ "${TRURLIC_SKIP_SIGNATURE_CHECK:-0}" = "1" ]; then
         warn "TRURLIC_SKIP_SIGNATURE_CHECK is set — skipping signature verification."
