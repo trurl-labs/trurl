@@ -346,6 +346,7 @@ mod tests {
                         reason: "test".into(),
                         alternatives: vec![],
                         tags: vec![],
+                        attribution: Attribution::User,
                         created: ts(),
                     },
                 },

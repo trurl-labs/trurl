@@ -6,6 +6,7 @@ use crate::store::graph::Severity;
 use crate::store::limits::{
     MAX_ARRAY_ITEMS, MAX_CHOICE_BYTES, MAX_TEXT_FIELD_BYTES, MIN_REASON_BYTES,
 };
+use crate::store::schema::Attribution;
 use crate::store::{self, Store};
 
 // ── Argument helpers ────────────────────────────────────────────────────────
@@ -146,6 +147,15 @@ pub(crate) fn record_decision(
     let constrains = opt_str_array(args, "constrains")?;
     let tags = opt_str_array(args, "tags")?;
     let supersedes = opt_str(args, "supersedes")?;
+    let attribution = match require_str(args, "attribution")? {
+        "user" => Attribution::User,
+        "agent" => Attribution::Agent,
+        other => {
+            return Err(format!(
+                "invalid attribution `{other}`: must be \"user\" or \"agent\""
+            ));
+        }
+    };
 
     // Validate component.
     if component != "project" && !store::is_valid_kebab_case(component) {
@@ -203,6 +213,7 @@ pub(crate) fn record_decision(
                 depends_on: &depends_on,
                 constrains: &constrains,
                 tags: &tags,
+                attribution,
             },
         )
         .map_err(|e| e.to_string())?;
@@ -458,6 +469,7 @@ mod tests {
             "component": "auth",
             "choice": "JWT with DPoP",
             "reason": "Stateless, no session store needed",
+            "attribution": "user",
         });
         let result = record_decision(&store, &mut state, &args).unwrap();
         assert_eq!(result["name"], "jwt-with-dpop");
@@ -473,6 +485,7 @@ mod tests {
             "component": "auth",
             "choice": "Use tokens",
             "reason": "Stateless, no server session",
+            "attribution": "user",
         });
         record_decision(&store, &mut state, &base).unwrap();
 
@@ -484,6 +497,7 @@ mod tests {
             "depends_on": ["use-tokens"],
             "tags": ["security", "auth"],
             "supersedes": "use-tokens",
+            "attribution": "user",
         });
         let result = record_decision(&store, &mut state, &args).unwrap();
         assert!(!result["name"].as_str().unwrap().is_empty());
@@ -519,6 +533,7 @@ mod tests {
             "component": "project",
             "choice": "Fail-closed on writes",
             "reason": "Never silently succeed with wrong data",
+            "attribution": "user",
         });
         let result = record_decision(&store, &mut state, &args).unwrap();
         let dec = state
@@ -535,6 +550,7 @@ mod tests {
             "component": "ghost",
             "choice": "x",
             "reason": "test validation target",
+            "attribution": "user",
         });
         let err = record_decision(&store, &mut state, &args).unwrap_err();
         assert!(err.contains("ghost"));
@@ -548,6 +564,7 @@ mod tests {
             "choice": "x",
             "reason": "test validation target",
             "depends_on": ["ghost"],
+            "attribution": "user",
         });
         let err = record_decision(&store, &mut state, &args).unwrap_err();
         assert!(err.contains("ghost"));
@@ -557,12 +574,13 @@ mod tests {
     fn record_decision_rejects_cycle() {
         let (_tmp, store, mut state) = setup();
 
-        let a = json!({ "component": "auth", "choice": "A", "reason": "cycle dependency test" });
+        let a = json!({ "component": "auth", "choice": "A", "reason": "cycle dependency test", "attribution": "user" });
         record_decision(&store, &mut state, &a).unwrap();
 
         let b = json!({
             "component": "auth", "choice": "B", "reason": "cycle dependency test",
             "depends_on": ["a"],
+            "attribution": "user",
         });
         record_decision(&store, &mut state, &b).unwrap();
 
@@ -584,9 +602,8 @@ mod tests {
         let (_tmp, store, mut state) = setup();
 
         // Record two decisions first.
-        let d1 =
-            json!({ "component": "auth", "choice": "Use Redis", "reason": "Fast in-memory reads" });
-        let d2 = json!({ "component": "database", "choice": "Redis pool", "reason": "Shared pool reduces overhead" });
+        let d1 = json!({ "component": "auth", "choice": "Use Redis", "reason": "Fast in-memory reads", "attribution": "user" });
+        let d2 = json!({ "component": "database", "choice": "Redis pool", "reason": "Shared pool reduces overhead", "attribution": "user" });
         record_decision(&store, &mut state, &d1).unwrap();
         record_decision(&store, &mut state, &d2).unwrap();
 
@@ -624,7 +641,7 @@ mod tests {
     #[test]
     fn record_pattern_rejects_single_decision() {
         let (_tmp, store, mut state) = setup();
-        let d = json!({ "component": "auth", "choice": "X", "reason": "test reason placeholder" });
+        let d = json!({ "component": "auth", "choice": "X", "reason": "test reason placeholder", "attribution": "user" });
         record_decision(&store, &mut state, &d).unwrap();
 
         let args = json!({
@@ -763,6 +780,7 @@ mod tests {
             "component": "auth",
             "choice": "Use JWT",
             "reason": "Stateless auth, no session store",
+            "attribution": "user",
         });
         let result = record_decision(&store, &mut state, &args).unwrap();
         assert!(result.get("workflow").is_none());
@@ -772,9 +790,8 @@ mod tests {
     #[test]
     fn record_pattern_returns_name_not_slug() {
         let (_tmp, store, mut state) = setup();
-        let d1 =
-            json!({ "component": "auth", "choice": "Use JWT", "reason": "Fast in-memory reads" });
-        let d2 = json!({ "component": "database", "choice": "JWT verify", "reason": "Authentication verification" });
+        let d1 = json!({ "component": "auth", "choice": "Use JWT", "reason": "Fast in-memory reads", "attribution": "user" });
+        let d2 = json!({ "component": "database", "choice": "JWT verify", "reason": "Authentication verification", "attribution": "user" });
         record_decision(&store, &mut state, &d1).unwrap();
         record_decision(&store, &mut state, &d2).unwrap();
 
@@ -808,6 +825,7 @@ mod tests {
             "component": "auth",
             "choice": "Use JWT",
             "reason": "ok",
+            "attribution": "user",
         });
         let err = record_decision(&store, &mut state, &args).unwrap_err();
         assert!(
@@ -824,6 +842,7 @@ mod tests {
             "component": "auth",
             "choice": long_choice,
             "reason": "This is a valid reason",
+            "attribution": "user",
         });
         let err = record_decision(&store, &mut state, &args).unwrap_err();
         assert!(err.contains("200"), "should reject long choice: {err}");
@@ -836,6 +855,7 @@ mod tests {
             "component": "auth",
             "choice": "Use JWT tokens",
             "reason": "Stateless authentication model",
+            "attribution": "user",
         });
         let result = record_decision(&store, &mut state, &args).unwrap();
         let warnings = result["warnings"].as_array().unwrap();
@@ -855,6 +875,7 @@ mod tests {
             "choice": "Use JWT tokens",
             "reason": "Stateless authentication model",
             "alternatives": ["Session cookies — server-side state"],
+            "attribution": "user",
         });
         let result = record_decision(&store, &mut state, &args).unwrap();
         let warnings = result["warnings"].as_array().unwrap();
@@ -878,6 +899,7 @@ mod tests {
             "choice": "Redis for session tokens",
             "reason": "Fast in-memory lookups for token validation",
             "tags": ["redis"],
+            "attribution": "user",
         });
         record_decision(&store, &mut state, &d1).unwrap();
 
@@ -887,6 +909,7 @@ mod tests {
             "choice": "Redis for query cache",
             "reason": "Avoid repeated expensive queries with caching",
             "tags": ["redis"],
+            "attribution": "user",
         });
         let result = record_decision(&store, &mut state, &d2).unwrap();
 
@@ -904,6 +927,7 @@ mod tests {
             "component": "auth",
             "choice": "Use JWT tokens",
             "reason": "Stateless authentication model",
+            "attribution": "user",
         });
         let result = record_decision(&store, &mut state, &args).unwrap();
         assert!(
@@ -922,6 +946,7 @@ mod tests {
             "choice": "Redis for session tokens",
             "reason": "Fast in-memory lookups for tokens",
             "tags": ["redis"],
+            "attribution": "user",
         });
         record_decision(&store, &mut state, &d1).unwrap();
 
@@ -930,6 +955,7 @@ mod tests {
             "choice": "Redis for rate limit counters",
             "reason": "Per-key counters need fast increment",
             "tags": ["redis"],
+            "attribution": "user",
         });
         let result = record_decision(&store, &mut state, &d2).unwrap();
         assert!(
@@ -960,6 +986,7 @@ mod tests {
             "component": "auth",
             "choice": "Use JWT tokens",
             "reason": "Stateless authentication model",
+            "attribution": "user",
         });
         record_decision(&store, &mut state, &d1).unwrap();
 
@@ -968,6 +995,7 @@ mod tests {
             "component": "auth",
             "choice": "Use JWT tokens",
             "reason": "Different reasoning entirely",
+            "attribution": "user",
         });
         let result = record_decision(&store, &mut state, &d2).unwrap();
         let warnings = result["warnings"].as_array().unwrap();
@@ -976,6 +1004,37 @@ mod tests {
                 .iter()
                 .any(|w| w.as_str().unwrap().contains("identical choice")),
             "should warn about duplicate: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn record_decision_requires_attribution() {
+        let (_tmp, store, mut state) = setup();
+        let d = json!({
+            "component": "auth",
+            "choice": "Use JWT",
+            "reason": "Stateless, no server session",
+        });
+        let err = record_decision(&store, &mut state, &d).unwrap_err();
+        assert!(
+            err.contains("attribution"),
+            "should require attribution parameter: {err}"
+        );
+    }
+
+    #[test]
+    fn record_decision_rejects_invalid_attribution() {
+        let (_tmp, store, mut state) = setup();
+        let d = json!({
+            "component": "auth",
+            "choice": "Use JWT",
+            "reason": "Stateless, no server session",
+            "attribution": "maybe",
+        });
+        let err = record_decision(&store, &mut state, &d).unwrap_err();
+        assert!(
+            err.contains("invalid attribution"),
+            "should reject invalid attribution value: {err}"
         );
     }
 

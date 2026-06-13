@@ -616,8 +616,8 @@ fn compare_versions(a: &str, b: &str) -> Ordering {
 pub(crate) mod testing {
     use super::*;
     use crate::store::schema::{
-        Component, ComponentFile, Decision, DecisionFile, EdgeEntry, EdgeKind, GraphIndex,
-        NodeEntry, NodeKind, Project, ProjectFile,
+        Attribution, Component, ComponentFile, Decision, DecisionFile, EdgeEntry, EdgeKind,
+        GraphIndex, NodeEntry, NodeKind, Project, ProjectFile,
     };
     use chrono::{TimeZone, Utc};
 
@@ -680,6 +680,7 @@ pub(crate) mod testing {
                 reason: format!("Reason for {name}"),
                 alternatives: vec![],
                 tags: vec![],
+                attribution: Attribution::User,
                 created: Utc.with_ymd_and_hms(2025, 6, 1, 12, 0, 0).unwrap(),
             },
         }
@@ -746,6 +747,7 @@ pub(crate) mod testing {
                     reason: "Stateless, no session store needed".into(),
                     alternatives: vec!["Session cookies — rejected: server state".into()],
                     tags: vec![],
+                    attribution: Attribution::User,
                     created: ts,
                 },
             }),
@@ -759,6 +761,7 @@ pub(crate) mod testing {
                     reason: "Consistent error propagation".into(),
                     alternatives: vec![],
                     tags: vec![],
+                    attribution: Attribution::User,
                     created: ts,
                 },
             }),
@@ -772,6 +775,7 @@ pub(crate) mod testing {
                     reason: "Avoid per-request connection overhead".into(),
                     alternatives: vec![],
                     tags: vec![],
+                    attribution: Attribution::User,
                     created: ts,
                 },
             }),
@@ -1011,6 +1015,7 @@ pub(crate) mod testing {
                     reason: "Stateless".into(),
                     alternatives: vec![],
                     tags: vec![],
+                    attribution: Attribution::User,
                     created: ts(),
                 },
             },
@@ -1024,6 +1029,7 @@ pub(crate) mod testing {
                     reason: "Consistent errors".into(),
                     alternatives: vec![],
                     tags: vec![],
+                    attribution: Attribution::User,
                     created: ts(),
                 },
             },
@@ -1037,6 +1043,7 @@ pub(crate) mod testing {
                     reason: "Avoid per-request overhead".into(),
                     alternatives: vec![],
                     tags: vec![],
+                    attribution: Attribution::User,
                     created: ts(),
                 },
             },

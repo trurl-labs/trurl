@@ -42,11 +42,7 @@ pub fn design(
         .map_err(|e| Error::Io(std::io::Error::other(e)))?;
 
     rt.block_on(crate::session::run_design(
-        &store,
-        &*client,
-        component,
-        mode,
-        task,
+        &store, &*client, component, mode, task,
     ))
 }
 
@@ -61,7 +57,15 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         init(tmp.path()).unwrap();
 
-        let err = design(tmp.path(), "../escape", SessionMode::Fresh, None, None, None).unwrap_err();
+        let err = design(
+            tmp.path(),
+            "../escape",
+            SessionMode::Fresh,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err();
         assert!(matches!(err, Error::InvalidName(_)));
 
         let err = design(tmp.path(), "", SessionMode::Fresh, None, None, None).unwrap_err();

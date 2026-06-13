@@ -853,6 +853,7 @@ mod tests {
                 reason: reason.into(),
                 alternatives: vec![],
                 tags: tags.iter().map(|t| (*t).into()).collect(),
+                attribution: Attribution::User,
                 created: Utc::now(),
             },
         }
@@ -866,6 +867,7 @@ mod tests {
                 reason: reason.into(),
                 alternatives: vec![],
                 tags: tags.iter().map(|t| (*t).into()).collect(),
+                attribution: Attribution::User,
                 created: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
             },
         }

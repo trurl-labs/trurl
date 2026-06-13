@@ -14,6 +14,7 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::provider::{LlmProvider, Message, Role};
+use crate::store::schema::Attribution;
 use crate::store::{self, RecordDecisionParams, RecordPatternParams, Store};
 use crate::workflow::{self, TaskType, steps};
 use crate::{Error, Result};
@@ -245,6 +246,7 @@ fn record_decisions(
                 depends_on: &[],
                 constrains: &[],
                 tags: &[],
+                attribution: Attribution::Agent,
             },
         ) {
             Ok(stem) => {

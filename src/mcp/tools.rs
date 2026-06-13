@@ -171,9 +171,14 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
                         "supersedes": {
                             "type": "string",
                             "description": "Decision name being replaced."
+                        },
+                        "attribution": {
+                            "type": "string",
+                            "enum": ["user", "agent"],
+                            "description": "Who authored this decision: \"user\" (human present) or \"agent\" (autonomous)."
                         }
                     },
-                    "required": ["component", "choice", "reason"]
+                    "required": ["component", "choice", "reason", "attribution"]
                 }
             },
             {

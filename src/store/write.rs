@@ -12,8 +12,8 @@ use crate::{Error, Result};
 
 use super::graph::Severity;
 use super::schema::{
-    Component, ComponentFile, Decision, DecisionFile, EdgeEntry, EdgeKind, GraphIndex, NodeEntry,
-    NodeKind, Pattern, PatternFile,
+    Attribution, Component, ComponentFile, Decision, DecisionFile, EdgeEntry, EdgeKind, GraphIndex,
+    NodeEntry, NodeKind, Pattern, PatternFile,
 };
 use super::state::{
     ProjectState, is_reserved_node_name, is_valid_kebab_case, slugify, unique_decision_stem,
@@ -57,6 +57,7 @@ pub struct RecordDecisionParams<'a> {
     pub depends_on: &'a [String],
     pub constrains: &'a [String],
     pub tags: &'a [String],
+    pub attribution: Attribution,
 }
 
 // ── AmendDecisionParams ─────────────────────────────────────────────
@@ -382,6 +383,7 @@ impl Store {
                 reason: params.reason.into(),
                 alternatives: params.alternatives.to_vec(),
                 tags: params.tags.to_vec(),
+                attribution: params.attribution,
                 created: Utc::now(),
             },
         };

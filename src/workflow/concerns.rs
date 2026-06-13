@@ -295,7 +295,7 @@ pub fn concern_status(decisions: &[&DecisionFile]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::schema::Decision;
+    use crate::store::schema::{Attribution, Decision};
     use chrono::{TimeZone, Utc};
 
     fn make_decision(component: &str, choice: &str, reason: &str, tags: &[&str]) -> DecisionFile {
@@ -306,6 +306,7 @@ mod tests {
                 reason: reason.into(),
                 alternatives: vec![],
                 tags: tags.iter().map(|t| (*t).into()).collect(),
+                attribution: Attribution::User,
                 created: Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap(),
             },
         }

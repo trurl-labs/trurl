@@ -101,8 +101,16 @@ pub(crate) async fn run(
 
         // ── Run dialogue for this step ────────────────────────────────
         let decisions_before = session.decisions_recorded.len();
-        let step_result =
-            run_step_dialogue(&ctx, session, state, &mut messages, &step, &completed, &prompt.instructions).await?;
+        let step_result = run_step_dialogue(
+            &ctx,
+            session,
+            state,
+            &mut messages,
+            &step,
+            &completed,
+            &prompt.instructions,
+        )
+        .await?;
 
         match step_result {
             StepOutcome::Complete => return Ok(()),
