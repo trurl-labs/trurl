@@ -201,7 +201,6 @@ impl Step {
         }
     }
 
-    #[allow(dead_code)]
     pub const fn is_gated(&self) -> bool {
         match self {
             Self::Register
@@ -223,6 +222,20 @@ impl Step {
             | Self::UserExplains => true,
         }
     }
+
+    /// Resolve a step name string to its gated status.
+    /// Returns `None` for unknown step names.
+    pub fn is_gated_name(name: &str) -> Option<bool> {
+        match name {
+            "register" | "scan_project" | "extract_decisions" | "project_rules" | "ready" => {
+                Some(false)
+            }
+            "define_scope" | "analyze_code" | "cover_concerns" | "walk_decisions"
+            | "verify_constraints" | "impact_check" | "pattern_detection" | "summary_gate"
+            | "drift_check" | "coverage_audit" | "user_explains" => Some(true),
+            _ => None,
+        }
+    }
 }
 
 // ── Integration tests ─────────────────────────────────────────────────────
@@ -238,6 +251,10 @@ mod integration_tests {
     use chrono::{TimeZone, Utc};
     use std::collections::BTreeMap;
     use std::sync::Arc;
+
+    fn empty_evidence() -> BTreeMap<&'static str, &'static str> {
+        BTreeMap::new()
+    }
 
     fn build_state(
         components: &[(&str, &str)],
@@ -338,7 +355,7 @@ mod integration_tests {
         component: &str,
         task_type: Option<TaskType>,
     ) {
-        let result = advance::advance(state, component, task_type, None, &[])
+        let result = advance::advance(state, component, task_type, None, &empty_evidence())
             .expect("advance should succeed");
 
         let step_name = result["step"]

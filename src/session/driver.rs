@@ -10,6 +10,8 @@
 
 use std::io::Write;
 
+use std::collections::BTreeMap;
+
 use crate::provider::{LlmProvider, Message, Role};
 use crate::store::{self, Store};
 use crate::workflow::{self, TaskType};
@@ -65,12 +67,16 @@ pub(crate) async fn run(
 
     loop {
         // ── Advance: determine current step ───────────────────────────
-        // Clone into owned strings so `completed` does not borrow `session`,
+        // Clone into owned strings so `evidence` does not borrow `session`,
         // which must remain mutably accessible for add_message / persist.
-        let completed_owned: Vec<String> = session.completed_steps.iter().cloned().collect();
-        let completed: Vec<&str> = completed_owned.iter().map(|s| s.as_str()).collect();
+        let evidence_owned: BTreeMap<String, String> =
+            session.step_evidence.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let evidence: BTreeMap<&str, &str> = evidence_owned
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let advance_result =
-            workflow::advance::advance(state, ctx.component, ctx.task_type, ctx.task, &completed)
+            workflow::advance::advance(state, ctx.component, ctx.task_type, ctx.task, &evidence)
                 .map_err(Error::Validation)?;
 
         let ready = advance_result["ready"].as_bool().unwrap_or(false);
@@ -86,7 +92,7 @@ pub(crate) async fn run(
             .to_string();
 
         // ── Loop detection: skip already-completed steps ──────────────
-        if session.completed_steps.contains(&step) {
+        if session.step_evidence.contains_key(&step) {
             eprintln!("\nAll reachable steps complete.");
             persistence::cleanup(ctx.store, ctx.component);
             return Ok(());
@@ -107,23 +113,23 @@ pub(crate) async fn run(
             state,
             &mut messages,
             &step,
-            &completed,
+            &evidence,
             &prompt.instructions,
         )
         .await?;
 
         match step_result {
             StepOutcome::Complete => return Ok(()),
-            StepOutcome::StepChanged => { /* outer loop picks up new step */ }
+            StepOutcome::StepChanged { last_user_input } => {
+                // ── Step completed ────────────────────────────────────
+                let graph_changed = session.decisions_recorded.len() > decisions_before;
+                if graph_changed {
+                    session.step_evidence.clear();
+                }
+                session.step_evidence.insert(step, last_user_input);
+                persistence::save(ctx.store, session)?;
+            }
         }
-
-        // ── Step completed ────────────────────────────────────────────
-        let graph_changed = session.decisions_recorded.len() > decisions_before;
-        if graph_changed {
-            session.completed_steps.clear();
-        }
-        session.completed_steps.insert(step);
-        persistence::save(ctx.store, session)?;
     }
 }
 
@@ -131,7 +137,7 @@ pub(crate) async fn run(
 
 enum StepOutcome {
     Complete,
-    StepChanged,
+    StepChanged { last_user_input: String },
 }
 
 async fn run_step_dialogue(
@@ -140,9 +146,10 @@ async fn run_step_dialogue(
     state: &mut store::ProjectState,
     messages: &mut Vec<Message>,
     step: &str,
-    completed: &[&str],
+    step_evidence: &BTreeMap<&str, &str>,
     system_prompt: &str,
 ) -> Result<StepOutcome> {
+    let mut last_user_input = String::new();
     loop {
         if messages.len() >= MESSAGE_COUNT_WARNING && messages.len().is_multiple_of(20) {
             eprintln!(
@@ -194,7 +201,7 @@ async fn run_step_dialogue(
 
         // ── Check if step changed ─────────────────────────────────
         let re_advance =
-            workflow::advance::advance(state, ctx.component, ctx.task_type, ctx.task, completed)
+            workflow::advance::advance(state, ctx.component, ctx.task_type, ctx.task, step_evidence)
                 .map_err(Error::Validation)?;
 
         let new_ready = re_advance["ready"].as_bool().unwrap_or(false);
@@ -205,7 +212,7 @@ async fn run_step_dialogue(
         }
         let new_step = re_advance["step"].as_str().unwrap_or("ready");
         if new_step != step {
-            return Ok(StepOutcome::StepChanged);
+            return Ok(StepOutcome::StepChanged { last_user_input });
         }
 
         // ── User input ────────────────────────────────────────────
@@ -224,6 +231,7 @@ async fn run_step_dialogue(
             }
         };
 
+        last_user_input = input.clone();
         messages.push(Message {
             role: Role::User,
             content: input.clone(),

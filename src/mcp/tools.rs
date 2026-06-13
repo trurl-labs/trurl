@@ -58,14 +58,16 @@ static TOOL_DEFINITIONS: LazyLock<Value> = LazyLock::new(|| {
                             "description": "Optional task context passed through to \
                                 design prompts."
                         },
-                        "completed_steps": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Steps already completed without graph \
-                                changes. The state machine skips these to progress \
-                                through steps whose postconditions are not verifiable \
-                                from the graph alone (e.g. verify_constraints, \
-                                walk_decisions, coverage_audit, summary_gate)."
+                        "step_evidence": {
+                            "type": "object",
+                            "additionalProperties": { "type": "string" },
+                            "description": "Evidence of user involvement for completed \
+                                steps. Keys are step names, values are evidence strings. \
+                                Gated (interactive) steps require evidence of at least \
+                                20 bytes. Ungated steps accept any value including empty \
+                                string. The state machine skips steps present in this \
+                                map to progress through steps whose postconditions are \
+                                not verifiable from the graph alone."
                         }
                     },
                     "required": ["component"]
@@ -480,18 +482,21 @@ fn dispatch_advance(state: &ProjectState, args: &Value) -> ToolEnvelope {
     };
     let task = args.get("task").and_then(|v| v.as_str());
 
-    let completed_owned: Vec<String> = args
-        .get("completed_steps")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
+    let evidence_owned: std::collections::BTreeMap<String, String> = args
+        .get("step_evidence")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                 .collect()
         })
         .unwrap_or_default();
-    let completed_refs: Vec<&str> = completed_owned.iter().map(|s| s.as_str()).collect();
+    let evidence_refs: std::collections::BTreeMap<&str, &str> = evidence_owned
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
 
-    match workflow::advance::advance(state, component, task_type, task, &completed_refs) {
+    match workflow::advance::advance(state, component, task_type, task, &evidence_refs) {
         Ok(result) => tool_result(&result),
         Err(msg) => tool_error(&msg),
     }

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -15,12 +15,11 @@ pub(crate) struct Session {
     pub component: String,
     pub messages: Vec<SessionMessage>,
     pub decisions_recorded: Vec<String>,
-    /// Steps completed in this session. Used to break heuristic loops
-    /// when advance returns a step whose postcondition isn't verifiable
-    /// from the graph (e.g. PatternDetection with no patterns found).
-    /// Cleared when new decisions are recorded (graph changed).
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub completed_steps: BTreeSet<String>,
+    /// Evidence of user involvement for completed steps. Keys are step
+    /// names, values are the user's last input for that step. Cleared
+    /// when new decisions are recorded (graph changed).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub step_evidence: BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -35,7 +34,7 @@ impl Session {
             component: component.into(),
             messages: Vec::new(),
             decisions_recorded: Vec::new(),
-            completed_steps: BTreeSet::new(),
+            step_evidence: BTreeMap::new(),
         }
     }
 

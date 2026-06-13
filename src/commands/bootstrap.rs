@@ -17,7 +17,7 @@ pub fn bootstrap(cwd: &Path) -> Result<()> {
     let (_store, state) = open_store(cwd)?;
 
     let result =
-        workflow::advance::advance(&state, "project", Some(TaskType::Bootstrap), None, &[])
+        workflow::advance::advance(&state, "project", Some(TaskType::Bootstrap), None, &std::collections::BTreeMap::new())
             .map_err(Error::Validation)?;
 
     let step = result["step"].as_str().unwrap_or("unknown");
@@ -47,7 +47,7 @@ pub fn bootstrap_component(cwd: &Path, component: &str) -> Result<()> {
     }
 
     let result =
-        workflow::advance::advance(&state, component, Some(TaskType::Bootstrap), None, &[])
+        workflow::advance::advance(&state, component, Some(TaskType::Bootstrap), None, &std::collections::BTreeMap::new())
             .map_err(Error::Validation)?;
 
     let step = result["step"].as_str().unwrap_or("unknown");

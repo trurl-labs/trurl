@@ -9,7 +9,7 @@
 //! Unlike the design session driver, bootstrap does not persist a session
 //! file — the graph IS the session state.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
@@ -35,16 +35,19 @@ pub(crate) async fn run(
     project_root: &Path,
     state: &mut store::ProjectState,
 ) -> Result<()> {
-    let mut completed: BTreeSet<String> = BTreeSet::new();
+    let mut completed: BTreeMap<String, String> = BTreeMap::new();
 
     loop {
-        let completed_refs: Vec<&str> = completed.iter().map(String::as_str).collect();
+        let evidence: BTreeMap<&str, &str> = completed
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let result = workflow::advance::advance(
             state,
             "project",
             Some(TaskType::Bootstrap),
             None,
-            &completed_refs,
+            &evidence,
         )
         .map_err(Error::Validation)?;
 
@@ -67,11 +70,9 @@ pub(crate) async fn run(
             run_step(store, client, project_root, state, &step, target.as_deref()).await?;
 
         if recorded {
-            // Graph changed — prior completions may no longer apply.
             completed.clear();
         } else {
-            // No graph change — mark step completed to avoid loops.
-            completed.insert(step);
+            completed.insert(step, String::new());
         }
     }
 }
@@ -84,16 +85,19 @@ pub(crate) async fn run_component(
     state: &mut store::ProjectState,
     component: &str,
 ) -> Result<()> {
-    let mut completed: BTreeSet<String> = BTreeSet::new();
+    let mut completed: BTreeMap<String, String> = BTreeMap::new();
 
     loop {
-        let completed_refs: Vec<&str> = completed.iter().map(String::as_str).collect();
+        let evidence: BTreeMap<&str, &str> = completed
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let result = workflow::advance::advance(
             state,
             component,
             Some(TaskType::Bootstrap),
             None,
-            &completed_refs,
+            &evidence,
         )
         .map_err(Error::Validation)?;
 
@@ -111,7 +115,7 @@ pub(crate) async fn run_component(
         if recorded {
             completed.clear();
         } else {
-            completed.insert(step);
+            completed.insert(step, String::new());
         }
     }
 }

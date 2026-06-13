@@ -171,6 +171,7 @@ pub(super) fn build_response(
         "task_type": task_type.as_str(),
         "step": step.as_str(),
         "ready": ready,
+        "requires_user_input": step.is_gated(),
         "assessment": assessment,
         "action": action,
     })
