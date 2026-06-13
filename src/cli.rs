@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+use crate::session::SessionMode;
 use crate::{Result, commands};
 
 #[derive(Parser, Debug)]
@@ -215,15 +216,23 @@ pub fn run(cli: Cli) -> Result<()> {
             task,
             provider,
             model,
-        } => commands::design(
-            &cwd,
-            &component,
-            continue_session,
-            revisit,
-            task.as_deref(),
-            provider.as_deref(),
-            model.as_deref(),
-        ),
+        } => {
+            let mode = if continue_session {
+                SessionMode::Continue
+            } else if revisit {
+                SessionMode::Revisit
+            } else {
+                SessionMode::Fresh
+            };
+            commands::design(
+                &cwd,
+                &component,
+                mode,
+                task.as_deref(),
+                provider.as_deref(),
+                model.as_deref(),
+            )
+        }
         Command::Decide {
             component,
             choice,
