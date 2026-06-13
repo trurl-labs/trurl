@@ -69,8 +69,11 @@ pub(crate) async fn run(
         // ── Advance: determine current step ───────────────────────────
         // Clone into owned strings so `evidence` does not borrow `session`,
         // which must remain mutably accessible for add_message / persist.
-        let evidence_owned: BTreeMap<String, String> =
-            session.step_evidence.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let evidence_owned: BTreeMap<String, String> = session
+            .step_evidence
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         let evidence: BTreeMap<&str, &str> = evidence_owned
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -200,9 +203,14 @@ async fn run_step_dialogue(
         persistence::save(ctx.store, session)?;
 
         // ── Check if step changed ─────────────────────────────────
-        let re_advance =
-            workflow::advance::advance(state, ctx.component, ctx.task_type, ctx.task, step_evidence)
-                .map_err(Error::Validation)?;
+        let re_advance = workflow::advance::advance(
+            state,
+            ctx.component,
+            ctx.task_type,
+            ctx.task,
+            step_evidence,
+        )
+        .map_err(Error::Validation)?;
 
         let new_ready = re_advance["ready"].as_bool().unwrap_or(false);
         if new_ready {
